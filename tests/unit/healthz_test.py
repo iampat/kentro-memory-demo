@@ -18,12 +18,11 @@ from kentro_server.settings import Settings
 def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the lifespan at a tmp state dir + tenants.json so the test doesn't touch real state.
 
-    Also disables the LLM cache: this test isn't about caching, and we don't want a
-    boot smoke to write anything into `<state_dir>/.llm_cache/`.
+    Cache stays on (production default) — the test never invokes the LLM, so no
+    real cache I/O happens, and the test reflects the production shape.
     """
     monkeypatch.setenv("KENTRO_STATE_DIR", str(tmp_path / "kentro_state"))
     monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tmp_path / "tenants.json"))
-    monkeypatch.setenv("KENTRO_LLM_CACHE_ENABLED", "0")
     # Also set a dummy Anthropic key so make_llm_client() inside the lifespan succeeds.
     real = Settings()
     if not real.anthropic_api_key:
