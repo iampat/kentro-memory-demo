@@ -2,6 +2,32 @@
 
 Python project using **UV** for environment/dependency management, **FastAPI** for HTTP, and **SQLModel** (on SQLAlchemy 2.x) for the database layer.
 
+## The handoff is ground truth — DO NOT DIVERGE WITHOUT EXPLICIT APPROVAL
+
+`implementation-handoff.md` (and the three documents it references — `demo.md`, `memory.md`, `memory-system.md`) are the authoritative spec for this project. Treat them as locked.
+
+**Hard rules:**
+
+1. **Never** add, remove, rename, or restructure a feature, package, dependency, file path, API method, type, or behavior that diverges from the handoff. If the handoff says "use X," use X.
+2. **Never** invent APIs, methods, CLI flags, output formats, or library behavior. If you don't know it for certain, **stop and confirm with the user** — do not guess from naming, vibes, or training-data familiarity. Cite the source you verified it from.
+3. **Never** silently substitute a "similar" library, change a tech-stack choice, swap a default, skip a step, or merge two steps. Each is a divergence requiring approval.
+4. **Never** "improve," refactor, or clean up something the handoff specifies a particular way, even if you think the alternative is better. Surface the suggestion as a question; act only after a yes.
+5. If something in the handoff is ambiguous, **incorrect**, or contradicts another reference doc — flag it explicitly to the user, present the conflict, and wait for resolution. Do not silently pick a side.
+6. If a step requires a decision the handoff defers (e.g., "pick during Step 2"), present the options and **wait** for the user's pick. Do not pre-decide and ask forgiveness later.
+
+**When divergence is approved**, record it in `CHANGE_LOG.md` AND update the corresponding section of `implementation-handoff.md` AND `IMPLEMENTATION_PLAN.md` so the spec stays the single source of truth. The plan and log are not allowed to drift from the handoff.
+
+## Tracking work — `IMPLEMENTATION_PLAN.md` and `CHANGE_LOG.md`
+
+The repo holds two living documents that you MUST keep current:
+
+- **`IMPLEMENTATION_PLAN.md`** — the live plan. Each step from `implementation-handoff.md` has a section here with status (`pending` / `in_progress` / `done`), notes, and any open questions. Update the status before starting a step and again when finishing it. If the plan changes (scope, ordering, dependencies), edit the plan first, then act.
+- **`CHANGE_LOG.md`** — append-only, reverse-chronological. One entry per discrete change (`YYYY-MM-DD | scope | summary`). Record code changes, doc edits, dependency adds, decision flips. Newest entries on top.
+
+When a step (or any non-trivial change) finishes, record it in **both** files in the same turn — first flip the plan entry to `done` with a one-line "what was built and where it lives", then prepend a `CHANGE_LOG.md` entry. Do not let one file lead the other.
+
+Also update the relevant section in `implementation-handoff.md` with the same one-paragraph "what was built" summary, as the handoff itself instructs.
+
 ## UV — Environment & Dependencies
 
 UV is the only supported way to manage the Python environment. Do not use `pip`, `pip-tools`, `poetry`, `pyenv`, or `python -m venv` directly.

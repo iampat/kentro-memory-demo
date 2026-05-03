@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ty_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtual env
+.venv/
+# .python-version is intentionally committed — pinned interpreter for contributors + CI
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Node / demo UI
+node_modules/
+.next/
+out/
+
+# Local data / state
+kentro_state/
+*.sqlite
+*.sqlite3
+*.db
+
+# LLM response cache (commit fixtures explicitly when needed)
+.llm_cache/

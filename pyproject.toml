@@ -1,0 +1,43 @@
+[project]
+name = "kentro-monorepo"
+version = "0"
+description = "Kentro monorepo root — workspace container only, not published."
+requires-python = ">=3.13"
+
+[tool.uv]
+managed = true
+package = false
+
+[tool.uv.workspace]
+members = ["packages/kentro", "packages/kentro_server"]
+
+[tool.uv.sources]
+kentro = { workspace = true }
+kentro-server = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "ty>=0.0.1a1",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "kentro",
+    "kentro-server",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py313"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/kentro/tests", "packages/kentro_server/tests"]
+python_files = ["*_test.py"]
+asyncio_mode = "auto"
