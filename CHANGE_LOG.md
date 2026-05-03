@@ -7,6 +7,7 @@ Format: `YYYY-MM-DD | scope | summary`
 
 ## 2026-05-03
 
+- 2026-05-03 | step-2 | **Step 2 done.** Wrote Pydantic v2 types covering every DTO the handoff lists: status enums (`FieldStatus`, `WriteStatus`), discriminated-union resolver specs and rules, `RuleSet`, lineage/value carriers (`LineageRecord`, `FieldValue`, `FieldValueCandidate`, `Conflict`), `EntityRecord`, `Agent`, operation results (`WriteResult`, `IngestionResult`, `ExtractionStep`, `ReevaluationReport`, `NLResponse`), and the `Entity` base class. SDK at `packages/kentro/src/kentro/types.py`, server mirror at `packages/kentro_server/src/kentro_server/api/types.py`. Parity test `tests/unit/types_parity_test.py` enforces lockstep across symbols, enum members, and model field shapes (annotation reprs are normalized for the two module prefixes). Sync-types skill at `.claude/skills/sync-types/SKILL.md` documents how to keep the two files coherent and how to record intentional divergence. All 5 unit tests pass.
 - 2026-05-03 | scaffold | **Step 0 done.** Built the uv workspace skeleton: root `pyproject.toml` (workspace + dev deps + ruff/pytest config), `.python-version` (3.13), `packages/kentro/` (SDK shell, hatchling), `packages/kentro_server/` (engine shell with typer CLI and FastAPI `/healthz`, hatchling), `packages/kentro_demo_ui/` (placeholder for Step 10), `tests/{unit,integration,scenario}/` skeleton with `tests/unit/healthz_test.py` (passes). `uv sync` generates `uv.lock`; `uv run kentro-server version` works.
 
 ## 2026-05-02
