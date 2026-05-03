@@ -186,8 +186,14 @@ def build_mcp() -> FastMCP:
     No I/O happens here — this just registers the tool functions. Each tool
     looks up its runtime deps via `_current_ctx()` so this function is safe to
     call at module import time.
+
+    `streamable_http_path="/"` is critical: by default FastMCP routes its
+    streamable-HTTP endpoint at `/mcp` *inside* its own Starlette app. We then
+    mount that app at `/mcp` on the parent FastAPI app — which would produce
+    the doubled URL `/mcp/mcp`. Setting the inner path to `/` makes the parent
+    mount the canonical entry point at `http://host/mcp`.
     """
-    mcp = FastMCP("kentro")
+    mcp = FastMCP("kentro", streamable_http_path="/")
     _register_tools(mcp)
     return mcp
 
