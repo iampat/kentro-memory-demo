@@ -184,15 +184,22 @@ The unit suite is hermetic — it never bound a port, never opened a real MCP se
 | 2 | `pytest tests/integration/end_to_end_smoke_test.py` — real Anthropic, real ingest, real conflict + resolver flow | ~$0.05–0.10 cold; cache covers re-runs | ✅ done (17s, cache hit) |
 | 3 | `kentro-server seed-demo` against the running server — 8 corpus markdown files via real `/documents` route | ~$0.50–2 cold; cache covers re-runs | ✅ done (8 docs, 26 entities total) |
 | 3.5 | Reboot the server on the same `kentro_state/` and verify entities + rules + tenants config persist | free, ~5s | ✅ done (rules version=2 + Acme entity present post-reboot) |
-| 4 | MCP client (e.g. `mcp inspector`) connects to `/mcp` with a valid + bad key, calls `kentro_remember`, reads via `kentro_read` | free, ~5min | **deferred** — needs user to install mcp inspector |
+| 4 | MCP client connects to `/mcp` with a valid Bearer key, exercises tool calls + auth + admin gate end-to-end | free, ~5min | ⚠️ partial — see below |
 
 Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` of `main`. All passed.
+
+**Tier 4 status — partial.** Manual MCP exploration done from Claude Code (acting as an MCP client) on `2026-05-03` against commit `f14385b` of `main`. Verified happy paths: `kentro_list_schema`, `kentro_get_rules`, `kentro_apply_rules` (admin gate accepts the admin key, version bumped 2→3→4), `kentro_remember` with a non-string `object_value` (round-trips correctly through MCP — confirms the High-#5 object_json fix), `kentro_read` (corroborates the lineage shape). NOT yet covered: (a) negative auth path through MCP — does an unknown key actually 401 before reaching tool code? (b) admin-gate denial through MCP — does a non-admin agent get the `McpAdminRequiredError` shape we expect? (c) automated test that drives a real MCP client session in CI/locally without a live server. Promote to ✅ once an automated MCP-transport integration test lands (likely in Step 11 alongside the scenario test).
 
 **Tier 1 caught a real bug:** the `smoke-test` CLI command failed against default-deny ACL because it never set up its own grants. Fixed by having the command apply a minimal permissive ruleset using the admin key it's already given (admin role required since `/rules/apply` is admin-gated).
 
 **Tier 1 caught a second real bug:** the committed `tenants.json` predated the `is_admin` field — `ingestion_agent` was no longer admin after PR #12 merged. Fixed in the same fix-commit (the `DEFAULT_LOCAL_TENANT` in code already had it; the file lagged).
 
-Tier 4 is the only end-to-end path that exercises FastMCP's streamable HTTP transport with our `AuthMiddleware` + `_LazyMcpMount` composed end-to-end; the unit suite covers `AuthMiddleware` directly with synthetic ASGI scopes but not the full transport. Surface for the user when they're ready to install/run an MCP client.
+**Tier 4 manual exploration caught a third bug:** the MCP `/mcp` endpoint was 404'ing because `FastMCP.streamable_http_path` defaults to `/mcp` and we mounted at `/mcp` on the parent app — full URL became `/mcp/mcp`. Fixed in commit `f14385b` by passing `streamable_http_path="/"` to `FastMCP(...)`. The unit suite missed it because `AuthMiddleware` is tested with synthetic ASGI scopes against a `_RecorderApp`, not against a real `FastMCP.streamable_http_app()`.
+
+### Known v0.1 follow-ups discovered in this round
+
+- **`Note.subject` is a placeholder field.** `kentro_remember` doesn't write the subject *into* the field — the subject IS the entity_key. Reads always return `Note.subject` as `UNKNOWN`. Either populate it from `entity_key` on every Note write, or drop the field from `Note`'s declared schema. Cosmetic; affects any UI that surfaces Note fields.
+- **MCP-transport integration test missing.** Add a test that drives a real MCP client through `AuthMiddleware` + `_LazyMcpMount` so the path-doubling class of bug can't recur silently. Best place is probably `tests/integration/mcp_smoke_test.py` (real transport, separate from the existing `tests/unit/mcp_smoke_test.py` which uses synthetic scopes).
 
 ---
 
