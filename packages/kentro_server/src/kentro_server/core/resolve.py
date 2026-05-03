@@ -6,6 +6,15 @@ candidates for one (entity, field), pick a winner — or signal UNRESOLVED.
 This module is a closed-form dispatcher over `ResolverSpec` variants. The only side
 effect is the `SkillResolver` LLM call, which goes through the `LLMClient` seam so
 tests can substitute the offline stub deterministically.
+
+TODO(workflow-aware-skills, planned for pre-Step-10): after a SkillResolver
+returns a decision, walk `decision.actions` and execute each action through
+the same write_field path (so ACL applies). Action types: "write_entity"
+(creates a Ticket-style entity inline), "notify" (emits a console-log +
+websocket event for the UI to render as a toast). See the matching TODO on
+SkillResolverDecision in skills/llm_client.py for the schema. Lands the
+"memory is the workflow trigger" demo beat. Tracked in IMPLEMENTATION_PLAN.md
+"Deferred to the very end".
 """
 
 from dataclasses import dataclass

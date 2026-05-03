@@ -52,7 +52,22 @@ class LLMOfflineError(RuntimeError):
 
 
 class SkillResolverDecision(BaseModel):
-    """Output of a SkillResolver LLM call."""
+    """Output of a SkillResolver LLM call.
+
+    TODO(workflow-aware-skills, planned for pre-Step-10): add an optional
+    `actions: tuple[SkillAction, ...] = ()` field so a Skill can emit
+    workflow steps alongside its winner pick — e.g.
+        {type: "write_entity", entity_type: "Ticket", fields: {...}}
+        {type: "notify",       channel: "#deals-review", message: "..."}
+    The orchestrator in `core/resolve.py` will execute each action through
+    the same ACL gate as a regular write (Skills cannot bypass governance).
+    This is the "memory is the workflow trigger" demo beat — it's how the
+    Scene 4 SkillResolver also creates Ticket #142 + fires the toast.
+    Tracked in IMPLEMENTATION_PLAN.md "Deferred to the very end" and
+    cross-referenced from demo.md / implementation-handoff.md / memory.md.
+    Must land BEFORE Step 10 begins; UI's <TicketBadge> + <EscalationToast>
+    components depend on this server-side surface.
+    """
 
     model_config = ConfigDict(frozen=True)
 
