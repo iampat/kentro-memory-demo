@@ -31,7 +31,6 @@ from kentro.schema import entity_type_def_from
 from kentro.types import (
     AutoResolverSpec,
     ConflictRule,
-    Entity,
     FieldStatus,
     RuleSet,
     SkillResolverSpec,
@@ -73,21 +72,11 @@ pytestmark = pytest.mark.skipif(
 
 
 # === Demo schemas ===
+#
+# Single source of truth: `kentro_server.demo.schemas` — shared with the CLI's
+# `seed-demo` command and any walkthrough notebook.
 
-
-class Customer(Entity):
-    name: str
-    contact: str | None = None
-    deal_size: float | None = None
-    sales_notes: str = ""
-    support_tickets: list[str] = []
-
-
-class Person(Entity):
-    name: str
-    phone: str | None = None
-    email: str | None = None
-
+from kentro_server.demo import Customer, Person  # noqa: E402
 
 # === Helpers ===
 
