@@ -1,0 +1,38 @@
+# Kentro server configuration.
+#
+# Source-of-truth for non-secret defaults. Loaded by `kentro_server.settings.Settings`
+# via `TomlConfigSettingsSource`. API keys live in .env (never here).
+#
+# Resolution order (highest priority first):
+#   1. Constructor kwargs in code (tests use this).
+#   2. Environment variables.
+#   3. .env file.
+#   4. THIS FILE (kentro.toml).
+#   5. Field defaults in `Settings`.
+#
+# Renaming or removing keys here is a breaking change — keep in sync with
+# `packages/kentro_server/src/kentro_server/settings.py`.
+
+# --- LLM tier model selection (provider auto-detected from prefix) ---
+# claude-* → Anthropic (needs ANTHROPIC_API_KEY in .env)
+# gemini-* → Google     (needs GOOGLE_API_KEY    in .env)
+kentro_llm_fast_model = "claude-haiku-4-5"
+kentro_llm_smart_model = "claude-sonnet-4-6"
+
+# --- LLM cache toggle (for performance measurement and demo recording) ---
+# true  = cache hits short-circuit; misses go to the provider and get cached.
+# false = bypass cache entirely (every call hits the provider).
+kentro_llm_cache_enabled = true
+
+# --- On-disk state root ---
+# Per-tenant subdirectories live under this path; the LLM cache also lives here.
+kentro_state_dir = "./kentro_state"
+
+# --- Tenants config file (Pydantic-shaped JSON) ---
+# Lives at the repo root by default — intentionally OUTSIDE `kentro_state_dir`
+# so it is tracked in git as configuration rather than gitignored as state.
+kentro_tenants_json = "./tenants.json"
+
+# --- Server bind ---
+kentro_host = "127.0.0.1"
+kentro_port = 8000

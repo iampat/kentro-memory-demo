@@ -1,12 +1,10 @@
 """Unit tests for the persistence layer."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlmodel import select
-
 from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig
 from kentro_server.store.models import (
     AgentRow,
@@ -15,13 +13,12 @@ from kentro_server.store.models import (
     FieldWriteRow,
     RuleVersionRow,
 )
+from sqlmodel import select
 
 
 def _make_registry(state_dir: Path, *tenant_ids: str) -> TenantRegistry:
     config = TenantsConfig(
-        tenants=tuple(
-            TenantConfig(id=tid, api_key=f"{tid}-key") for tid in tenant_ids
-        )
+        tenants=tuple(TenantConfig(id=tid, api_key=f"{tid}-key") for tid in tenant_ids)
     )
     return TenantRegistry(state_dir, config)
 
@@ -59,7 +56,7 @@ def test_round_trip_agent_and_entity_and_field_write(registry: TenantRegistry) -
             field_name="deal_size",
             value_json="250000",
             written_by_agent_id="sales",
-            written_at=datetime.now(timezone.utc),
+            written_at=datetime.now(UTC),
             rule_version_at_write=0,
         )
         s.add(write)
@@ -69,9 +66,7 @@ def test_round_trip_agent_and_entity_and_field_write(registry: TenantRegistry) -
 
     # New session — confirm persistence to disk.
     with store.session() as s:
-        rows = s.exec(
-            select(FieldWriteRow).where(FieldWriteRow.id == write_id)
-        ).all()
+        rows = s.exec(select(FieldWriteRow).where(FieldWriteRow.id == write_id)).all()
         if len(rows) != 1:
             raise AssertionError(f"expected 1 row, got {len(rows)}")
         if rows[0].value_json != "250000":

@@ -10,7 +10,7 @@ or encrypted store on top of this without the broader auth/secrets review the de
 explicitly defers.
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TenantConfig(BaseModel):
@@ -24,11 +24,34 @@ class TenantConfig(BaseModel):
 
 
 class TenantsConfig(BaseModel):
-    """Top-level shape of `tenants.json`."""
+    """Top-level shape of `tenants.json`. Validates uniqueness on load."""
 
     model_config = ConfigDict(frozen=True)
 
     tenants: tuple[TenantConfig, ...] = ()
+
+    @model_validator(mode="after")
+    def _no_duplicate_ids_or_keys(self) -> "TenantsConfig":
+        """Reject duplicate tenant IDs or duplicate api_keys at load time.
+
+        Without this check, two tenants with the same api_key would silently
+        overwrite the routing table — one tenant becomes unreachable through
+        that credential, and a request authed with the duplicated key routes
+        to whichever tenant happened to be loaded last. Auth/isolation hole.
+        """
+        seen_ids: set[str] = set()
+        seen_keys: set[str] = set()
+        for t in self.tenants:
+            if t.id in seen_ids:
+                raise ValueError(f"duplicate tenant id: {t.id!r}")
+            if t.api_key in seen_keys:
+                raise ValueError(
+                    f"duplicate tenant api_key for tenant {t.id!r} "
+                    "(api keys must be unique across tenants — fix `tenants.json`)"
+                )
+            seen_ids.add(t.id)
+            seen_keys.add(t.api_key)
+        return self
 
 
 __all__ = ["TenantConfig", "TenantsConfig"]

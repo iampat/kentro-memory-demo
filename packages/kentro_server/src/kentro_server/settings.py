@@ -1,50 +1,86 @@
-"""kentro-server settings — loaded from `.env` and the process environment.
+"""kentro-server settings.
 
-Field names match env var names (case-insensitive). Missing keys default per the
-field declaration. All settings live here in one place so the factories and the
-CLI commands consume a single typed object.
+Field declarations live here; **default values for non-secret settings live in
+`kentro.toml`** at the repo root (loaded via `TomlConfigSettingsSource`). Secrets
+(`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) come from `.env` or process env only —
+never from `kentro.toml`.
+
+Resolution order (highest priority first):
+  1. Constructor kwargs in code (tests use this).
+  2. Environment variables (process env).
+  3. `.env` file (gitignored).
+  4. `kentro.toml` (committed config).
+  5. Field defaults declared in this class (last-resort fallbacks).
+
+To keep the layering predictable, do NOT put API keys in `kentro.toml`. The
+`SettingsConfigDict(extra="ignore")` makes unknown keys in any source non-fatal.
 """
 
 from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+_DEFAULT_TOML = _REPO_ROOT / "kentro.toml"
+_DEFAULT_ENV = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_DEFAULT_ENV),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        toml_file=str(_DEFAULT_TOML),
     )
 
-    # --- LLM provider keys ---
+    # --- LLM provider keys (secrets — .env or env var only, NEVER in kentro.toml) ---
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
 
-    # --- LLM tier model selection ---
-    # Provider is auto-detected from the model name prefix:
-    #   "claude-*"  → Anthropic  (requires ANTHROPIC_API_KEY)
-    #   "gemini-*"  → Google     (requires GOOGLE_API_KEY)
+    # --- LLM tier model selection (default: kentro.toml) ---
     kentro_llm_fast_model: str = "claude-haiku-4-5"
     kentro_llm_smart_model: str = "claude-sonnet-4-6"
 
-    # --- LLM cache toggle (for performance measurement and demo recording) ---
-    # When True, completed prompts are stored on disk and replayed on identical inputs.
-    # When False, every call goes to the provider — useful for measuring hot-path latency.
+    # --- LLM cache toggle (default: kentro.toml) ---
     kentro_llm_cache_enabled: bool = True
 
-    # --- On-disk state root ---
-    # Per-tenant subdirectories live under this path; the LLM cache also lives here.
+    # --- On-disk state root (default: kentro.toml) ---
     kentro_state_dir: Path = Path("./kentro_state")
 
-    # --- Server bind ---
+    # --- Tenants config file (default: kentro.toml) ---
+    kentro_tenants_json: Path = Path("./tenants.json")
+
+    # --- Server bind (default: kentro.toml) ---
     kentro_host: str = "127.0.0.1"
     kentro_port: int = 8000
 
     @property
     def llm_cache_dir(self) -> Path:
         return self.kentro_state_dir / ".llm_cache"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Layer the settings sources. TOML sits below env/.env so secrets stay out of it."""
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            TomlConfigSettingsSource(settings_cls),
+            file_secret_settings,
+        )
 
 
 __all__ = ["Settings"]

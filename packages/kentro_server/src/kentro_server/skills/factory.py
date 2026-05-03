@@ -4,7 +4,7 @@ Detects the provider per tier from the model name prefix:
     "claude-*"  → Anthropic  (requires `ANTHROPIC_API_KEY`)
     "gemini-*"  → Google     (requires `GOOGLE_API_KEY`)
 
-Mixed-provider tiers are supported via `_RoutingLLMClient`. Misconfiguration raises
+Mixed-provider tiers are supported via `RoutingLLMClient`. Misconfiguration raises
 `LLMConfigError` at startup — never silently falls back to a different provider.
 
 Always wraps the chosen client(s) in a `CachingLLMClient` honoring
@@ -35,13 +35,17 @@ def detect_provider(model: str) -> str:
         return "anthropic"
     if model.startswith("gemini-"):
         return "google"
-    raise LLMConfigError(
-        f"unknown model {model!r}: must start with 'claude-' or 'gemini-'"
-    )
+    raise LLMConfigError(f"unknown model {model!r}: must start with 'claude-' or 'gemini-'")
 
 
-def make_llm_client(settings: Settings) -> LLMClient:
-    """Build the LLMClient for `settings`. Raises `LLMConfigError` on misconfiguration."""
+def make_llm_client(settings: Settings) -> CachingLLMClient:
+    """Build the LLMClient for `settings`. Raises `LLMConfigError` on misconfiguration.
+
+    Always returns a `CachingLLMClient`. Callers that only need the abstract surface
+    can treat the return as `LLMClient`; tests that introspect `.inner` use the full
+    type. Returning the concrete wrapper here also lets the type checker see the
+    `.stats`, `.enabled`, and `.inner` attributes that consumers already rely on.
+    """
     fast_provider = detect_provider(settings.kentro_llm_fast_model)
     smart_provider = detect_provider(settings.kentro_llm_smart_model)
 
@@ -66,7 +70,7 @@ def make_llm_client(settings: Settings) -> LLMClient:
             fast_model=settings.kentro_llm_smart_model,
             smart_model=settings.kentro_llm_smart_model,
         )
-        inner = _RoutingLLMClient(fast=fast_only, smart=smart_only)
+        inner = RoutingLLMClient(fast=fast_only, smart=smart_only)
 
     cache = CachingLLMClient(
         inner=inner,
@@ -75,14 +79,18 @@ def make_llm_client(settings: Settings) -> LLMClient:
     )
     logger.info(
         "LLMClient ready: fast=%s (%s), smart=%s (%s), cache_enabled=%s",
-        settings.kentro_llm_fast_model, fast_provider,
-        settings.kentro_llm_smart_model, smart_provider,
+        settings.kentro_llm_fast_model,
+        fast_provider,
+        settings.kentro_llm_smart_model,
+        smart_provider,
         settings.kentro_llm_cache_enabled,
     )
     return cache
 
 
-def _build_single(*, provider: str, settings: Settings, fast_model: str, smart_model: str) -> LLMClient:
+def _build_single(
+    *, provider: str, settings: Settings, fast_model: str, smart_model: str
+) -> LLMClient:
     if provider == "anthropic":
         if not settings.anthropic_api_key:
             raise LLMConfigError(
@@ -91,6 +99,7 @@ def _build_single(*, provider: str, settings: Settings, fast_model: str, smart_m
             )
         # Local import keeps the SDK pulled in only when it's actually selected.
         from kentro_server.skills.anthropic_client import AnthropicLLMClient
+
         return AnthropicLLMClient(
             api_key=settings.anthropic_api_key,
             fast_model=fast_model,
@@ -103,6 +112,7 @@ def _build_single(*, provider: str, settings: Settings, fast_model: str, smart_m
                 "but GOOGLE_API_KEY is not set"
             )
         from kentro_server.skills.gemini_client import GeminiLLMClient
+
         return GeminiLLMClient(
             api_key=settings.google_api_key,
             fast_model=fast_model,
@@ -111,12 +121,28 @@ def _build_single(*, provider: str, settings: Settings, fast_model: str, smart_m
     raise LLMConfigError(f"unknown provider {provider!r}")
 
 
-class _RoutingLLMClient(LLMClient):
-    """Dispatch fast-tier calls to one client, smart-tier to another."""
+class RoutingLLMClient(LLMClient):
+    """Dispatch fast-tier calls to one client, smart-tier to another.
+
+    Exposes `fast_model` / `smart_model` properties that delegate to the wrapped
+    inner clients. The `CachingLLMClient`'s `_peek_attr` lookup uses these to
+    derive a stable cache key, so a routed client caches identically to a single-
+    provider client.
+    """
 
     def __init__(self, *, fast: LLMClient, smart: LLMClient) -> None:
         self.fast = fast
         self.smart = smart
+
+    @property
+    def fast_model(self) -> str:
+        # Best-effort: surface the inner client's selected model name. If the inner
+        # is itself a router (shouldn't happen) we'd return the inner's `fast_model`.
+        return getattr(self.fast, "fast_model", "<unknown-fast>")
+
+    @property
+    def smart_model(self) -> str:
+        return getattr(self.smart, "smart_model", "<unknown-smart>")
 
     def run_skill_resolver(
         self,
@@ -131,19 +157,20 @@ class _RoutingLLMClient(LLMClient):
         self,
         *,
         document_text: str,
-        registered_entity_types: list[str],
+        registered_schemas: list,
         document_label: str | None = None,
         model: str | None = None,
     ) -> ExtractionResult:
         return self.smart.extract_entities(
             document_text=document_text,
-            registered_entity_types=registered_entity_types,
+            registered_schemas=registered_schemas,
             document_label=document_label,
             model=model,
         )
 
 
 __all__ = [
+    "RoutingLLMClient",
     "detect_provider",
     "make_llm_client",
 ]

@@ -28,8 +28,6 @@ future ruleset has overlapping wildcard and specific rules with conflicting deci
 revisit the combining algorithm before relying on a particular outcome.
 """
 
-from pydantic import BaseModel, ConfigDict
-
 from kentro.types import (
     EntityVisibilityRule,
     FieldReadRule,
@@ -37,6 +35,7 @@ from kentro.types import (
     RuleSet,
     WriteRule,
 )
+from pydantic import BaseModel, ConfigDict
 
 
 class AclDecision(BaseModel):
@@ -61,7 +60,8 @@ def evaluate_field_read(
 ) -> AclDecision:
     """Decide whether `agent_id` may read `entity_type.field_name`."""
     matches = [
-        r for r in ruleset.rules
+        r
+        for r in ruleset.rules
         if isinstance(r, FieldReadRule)
         and r.agent_id == agent_id
         and r.entity_type == entity_type
@@ -79,7 +79,8 @@ def evaluate_entity_visibility(
 ) -> AclDecision:
     """Decide whether `agent_id` may see entities of `entity_type` (or this specific key)."""
     matches: list[Rule] = [
-        r for r in ruleset.rules
+        r
+        for r in ruleset.rules
         if isinstance(r, EntityVisibilityRule)
         and r.agent_id == agent_id
         and r.entity_type == entity_type
@@ -101,7 +102,8 @@ def evaluate_write(
     matching `WriteRule` may also have `field_name=None` (wildcard) or a specific name.
     """
     matches: list[Rule] = [
-        r for r in ruleset.rules
+        r
+        for r in ruleset.rules
         if isinstance(r, WriteRule)
         and r.agent_id == agent_id
         and r.entity_type == entity_type

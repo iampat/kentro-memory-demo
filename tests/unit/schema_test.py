@@ -3,14 +3,13 @@
 from pathlib import Path
 
 import pytest
-
 from kentro.schema import entity_type_def_from
 from kentro.types import Entity, EntityTypeDef, FieldDef
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
 
-
 # === SDK introspection ===
+
 
 class Customer(Entity):
     name: str
@@ -42,17 +41,22 @@ def test_introspect_renders_optional_type_as_pipe_form() -> None:
     td = entity_type_def_from(Customer)
     by_name = {f.name: f for f in td.fields}
     if "None" not in by_name["contact"].type_str:
-        raise AssertionError(f"optional type should mention None, got {by_name['contact'].type_str!r}")
+        raise AssertionError(
+            f"optional type should mention None, got {by_name['contact'].type_str!r}"
+        )
 
 
 def test_introspect_captures_string_default() -> None:
     td = entity_type_def_from(Customer)
     by_name = {f.name: f for f in td.fields}
     if by_name["sales_notes"].default_json != '""':
-        raise AssertionError(f"string default not captured, got {by_name['sales_notes'].default_json!r}")
+        raise AssertionError(
+            f"string default not captured, got {by_name['sales_notes'].default_json!r}"
+        )
 
 
 # === Server-side SchemaRegistry ===
+
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
@@ -88,10 +92,12 @@ def test_register_replaces_existing(store: TenantStore) -> None:
 
 
 def test_register_many_persists_across_instances(store: TenantStore) -> None:
-    SchemaRegistry(store).register_many([
-        entity_type_def_from(Customer),
-        entity_type_def_from(Person),
-    ])
+    SchemaRegistry(store).register_many(
+        [
+            entity_type_def_from(Customer),
+            entity_type_def_from(Person),
+        ]
+    )
 
     fresh = SchemaRegistry(store)
     if set(fresh.names()) != {"Customer", "Person"}:

@@ -104,9 +104,7 @@ def version() -> None:
 
 @cli.command("llm-stats")
 def llm_stats_cli(
-    base_url: str = typer.Option(
-        "http://127.0.0.1:8000", help="Server base URL to query."
-    ),
+    base_url: str = typer.Option("http://127.0.0.1:8000", help="Server base URL to query."),
 ) -> None:
     """Query a running kentro-server for its LLM cache hit/miss counters."""
     try:

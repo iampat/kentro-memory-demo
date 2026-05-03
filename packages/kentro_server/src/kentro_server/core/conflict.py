@@ -12,7 +12,7 @@ Detection contract (see plan + IMPLEMENTATION_PLAN Step 5):
 `superseded` is NOT touched here. Resolution is purely a read-time view (see `resolve.py`).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlmodel import Session, col, select
@@ -42,7 +42,7 @@ def record_field_write(
         value_json=value_json,
         confidence=confidence,
         written_by_agent_id=written_by_agent_id,
-        written_at=datetime.now(timezone.utc),
+        written_at=datetime.now(UTC),
         source_document_id=source_document_id,
         rule_version_at_write=rule_version_at_write,
         extraction_step_id=extraction_step_id,

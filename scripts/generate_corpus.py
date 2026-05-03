@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
-
 from kentro_server.settings import Settings
 
 ROOT = Path(__file__).resolve().parent.parent

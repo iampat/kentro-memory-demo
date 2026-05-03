@@ -1,12 +1,11 @@
 """Tests for `CachingLLMClient` — fingerprinting, hit/miss accounting, toggle."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from kentro.types import EntityTypeDef, FieldDef
 from kentro_server.skills.cache import CachingLLMClient
 from kentro_server.skills.llm_client import (
@@ -34,15 +33,19 @@ class _CountingLLM(LLMClient):
     extract_calls: int = 0
     skill_decision: SkillResolverDecision = field(
         default_factory=lambda: SkillResolverDecision(
-            chosen_value_json="300000", reason="picked email",
+            chosen_value_json="300000",
+            reason="picked email",
         )
     )
     extraction_result: ExtractionResult = field(
         default_factory=lambda: ExtractionResult(
-            entities=(ExtractedEntity(
-                entity_type="Customer", key="Acme",
-                fields=(ExtractedField(field_name="deal_size", value_json="250000"),),
-            ),),
+            entities=(
+                ExtractedEntity(
+                    entity_type="Customer",
+                    key="Acme",
+                    fields=(ExtractedField(field_name="deal_size", value_json="250000"),),
+                ),
+            ),
         )
     )
 
@@ -50,7 +53,9 @@ class _CountingLLM(LLMClient):
         self.skill_calls += 1
         return self.skill_decision
 
-    def extract_entities(self, *, document_text, registered_schemas, document_label=None, model=None):
+    def extract_entities(
+        self, *, document_text, registered_schemas, document_label=None, model=None
+    ):
         self.extract_calls += 1
         return self.extraction_result
 
@@ -62,7 +67,7 @@ def _write(value: str = "250000") -> FieldWriteRow:
         field_name="deal_size",
         value_json=value,
         written_by_agent_id="ingestion_agent",
-        written_at=datetime(2026, 4, 15, tzinfo=timezone.utc),
+        written_at=datetime(2026, 4, 15, tzinfo=UTC),
         rule_version_at_write=1,
     )
 
@@ -86,7 +91,9 @@ def test_first_call_is_a_miss_second_is_a_hit(cache_dir: Path) -> None:
     cache2 = CachingLLMClient(inner=inner, cache_dir=cache_dir, enabled=True)
     cache2.run_skill_resolver(prompt="P", candidates=[_write()], model="claude-haiku-4-5")
     if cache2.stats.hits != 1 or cache2.stats.inner_calls != 0:
-        raise AssertionError(f"second call (new wrapper) expected 1/0, got {cache2.stats.render()}")
+        raise AssertionError(
+            f"second call (new wrapper) expected 1/0, got {cache2.stats.render()}"
+        )
     if inner.skill_calls != 1:
         raise AssertionError("inner must NOT have been called again on a hit")
 
@@ -110,7 +117,9 @@ def test_different_prompts_produce_different_cache_keys(cache_dir: Path) -> None
     inner = _CountingLLM()
     cache = CachingLLMClient(inner=inner, cache_dir=cache_dir, enabled=True)
 
-    cache.run_skill_resolver(prompt="written outweighs verbal", candidates=[_write()], model="claude-haiku-4-5")
+    cache.run_skill_resolver(
+        prompt="written outweighs verbal", candidates=[_write()], model="claude-haiku-4-5"
+    )
     cache.run_skill_resolver(prompt="latest wins", candidates=[_write()], model="claude-haiku-4-5")
     if inner.skill_calls != 2:
         raise AssertionError("two different prompts must produce two inner calls")
@@ -136,9 +145,13 @@ def test_extract_entities_is_cached_separately(cache_dir: Path) -> None:
         model="claude-sonnet-4-6",
     )
     if inner.extract_calls != 1:
-        raise AssertionError(f"identical extract calls must hit cache, inner_calls={inner.extract_calls}")
+        raise AssertionError(
+            f"identical extract calls must hit cache, inner_calls={inner.extract_calls}"
+        )
     if cache.stats.hit_rate != 0.5:
-        raise AssertionError(f"hit rate after 1 miss + 1 hit should be 0.5, got {cache.stats.hit_rate}")
+        raise AssertionError(
+            f"hit rate after 1 miss + 1 hit should be 0.5, got {cache.stats.hit_rate}"
+        )
 
 
 def test_hit_rate_zero_when_no_calls(cache_dir: Path) -> None:
@@ -152,8 +165,11 @@ def test_hit_rate_zero_when_no_calls(cache_dir: Path) -> None:
 def test_offline_extract_raises(cache_dir: Path) -> None:
     """Sanity: OfflineLLMClient.extract_entities raises (not used in production)."""
     from kentro_server.skills.llm_client import OfflineLLMClient
+
     cache = CachingLLMClient(inner=OfflineLLMClient(), cache_dir=cache_dir)
     with pytest.raises(LLMOfflineError):
         cache.extract_entities(
-            document_text="x", registered_schemas=[_customer_schema()], model="claude-sonnet-4-6",
+            document_text="x",
+            registered_schemas=[_customer_schema()],
+            model="claude-sonnet-4-6",
         )

@@ -54,8 +54,22 @@ If a test fails, do NOT modify the test to make it pass unless you are intention
 changing observed behavior — fix the implementation. If the failure is genuinely a
 test bug, fix the test in the same commit and call it out in the commit message.
 
-CI is intentionally not configured yet; this manual rule is the substitute. CI setup
-is on the IMPLEMENTATION_PLAN.md "deferred to the very end" list.
+CI is intentionally not configured yet; this manual rule + the local pre-commit hook
+(below) are the substitute. CI setup is on the IMPLEMENTATION_PLAN.md "deferred to
+the very end" list.
+
+### Local pre-commit hook
+
+A tracked git hook at `scripts/git-hooks/pre-commit` runs **ruff (lint + format),
+ty, and the unit test suite** on every commit. Install once per clone:
+
+```bash
+git config --local core.hooksPath scripts/git-hooks
+```
+
+The hook is fast (~5s combined). Bypass with `git commit --no-verify` only when
+you genuinely understand why and you'll fix the failure in the next commit — never
+as a way to ship a broken commit.
 
 ## Tracking work — `IMPLEMENTATION_PLAN.md` and `CHANGE_LOG.md`
 
@@ -111,7 +125,19 @@ uv python pin 3.13               # pin the Python version (writes .python-versio
 
 ## Error Handling
 
-- Catch specific exception types — never bare `except Exception:` or `except:`.
+- **Never `raise Exception(...)`.** Always raise a specific subclass — `ValueError`,
+  `RuntimeError`, `KeyError`, a domain-specific subclass, etc. `raise Exception(...)`
+  is a code smell: it tells callers nothing about *what* went wrong and forces them
+  to either re-raise blindly or `except Exception` (which is its own smell).
+- **Never `except Exception:` or bare `except:`.** Catch the specific exception types
+  you can actually handle. The single legitimate exception is a top-level cleanup
+  handler that logs and re-raises (e.g., the `BaseException` clean-up-orphan-blob
+  pattern in `extraction/ingestor.py` — and that one is `BaseException`, not
+  `Exception`, deliberately, so KeyboardInterrupt also runs the cleanup).
+- **Never nest `try`/`except` more than one level.** A nested try-except is almost
+  always a sign that the function is doing too many distinct things — extract a
+  helper. If you genuinely need both a primary and a recovery `try`, write them
+  sequentially with explicit return paths, not nested.
 - Never swallow exceptions silently. Always log before returning a fallback:
   ```python
   try:

@@ -147,7 +147,9 @@ class AnthropicLLMClient(LLMClient):
         user: str,
         response_model: type[_TModel],
     ) -> _TModel:
-        logger.debug("anthropic.complete model=%s response_model=%s", model, response_model.__name__)
+        logger.debug(
+            "anthropic.complete model=%s response_model=%s", model, response_model.__name__
+        )
         return self._client.messages.create(
             model=model,
             temperature=0,
@@ -162,16 +164,17 @@ class AnthropicLLMClient(LLMClient):
     def _format_skill_user(policy: str, candidates: "list[FieldWriteRow]") -> str:
         rendered_candidates = []
         for c in candidates:
-            rendered_candidates.append({
-                "agent_id": c.written_by_agent_id,
-                "written_at": c.written_at.isoformat(),
-                "source_document_id": str(c.source_document_id) if c.source_document_id else None,
-                "value_json": c.value_json,
-            })
-        return (
-            f"POLICY:\n{policy}\n\n"
-            f"CANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
-        )
+            rendered_candidates.append(
+                {
+                    "agent_id": c.written_by_agent_id,
+                    "written_at": c.written_at.isoformat(),
+                    "source_document_id": str(c.source_document_id)
+                    if c.source_document_id
+                    else None,
+                    "value_json": c.value_json,
+                }
+            )
+        return f"POLICY:\n{policy}\n\nCANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
 
     @staticmethod
     def _format_extract_user(
@@ -181,10 +184,7 @@ class AnthropicLLMClient(LLMClient):
     ) -> str:
         schema_block = _render_schema_block(registered_schemas)
         header = f"DOCUMENT LABEL: {document_label}\n" if document_label else ""
-        return (
-            f"REGISTERED SCHEMA:\n{schema_block}\n\n"
-            f"{header}DOCUMENT:\n{document_text}"
-        )
+        return f"REGISTERED SCHEMA:\n{schema_block}\n\n{header}DOCUMENT:\n{document_text}"
 
 
 def _render_schema_block(registered_schemas: list) -> str:
@@ -194,7 +194,9 @@ def _render_schema_block(registered_schemas: list) -> str:
         chunks.append(f"- {td.name}:")
         for f in td.fields:
             req = "required" if f.required else "optional"
-            default = f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
+            default = (
+                f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
+            )
             chunks.append(f"    * {f.name}: {f.type_str} ({req}){default}")
     return "\n".join(chunks)
 

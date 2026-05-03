@@ -124,7 +124,7 @@ LLM infrastructure (`packages/kentro_server/src/kentro_server/`):
 - `skills/llm_client.py` — `LLMClient` ABC with `run_skill_resolver` (fast tier) + `extract_entities` (smart tier). Output schemas: `SkillResolverDecision`, `ExtractionResult` / `ExtractedEntity` / `ExtractedField`. `OfflineLLMClient` is the test stand-in (raises `LLMOfflineError` on `extract_entities`); never used in production.
 - `skills/anthropic_client.py` + `skills/gemini_client.py` — both providers via `instructor.from_anthropic` / `instructor.from_genai`. System prompts shared between providers so extraction is consistent.
 - `skills/cache.py` — `CachingLLMClient` wrapper. Disk-backed at `<state_dir>/.llm_cache/<sha256>.json`. Process-wide `CacheStats` (`hits`, `inner_calls`, `hit_rate`). `enabled` toggle for perf measurement.
-- `skills/factory.py` — `make_llm_client(settings)` detects provider per tier from model prefix (`claude-*` → Anthropic, `gemini-*` → Google), raises `LLMConfigError` on missing key, returns mixed-tier `_RoutingLLMClient` if needed, always wraps in `CachingLLMClient`. `get_llm_client()` is the lazy process singleton.
+- `skills/factory.py` — `make_llm_client(settings)` detects provider per tier from model prefix (`claude-*` → Anthropic, `gemini-*` → Google), raises `LLMConfigError` on missing key, returns mixed-tier `RoutingLLMClient` if needed, always wraps in `CachingLLMClient`. (Originally the file also exported a `get_llm_client()` process singleton; that was retired in the "no singletons" cleanup — see "Resolved tech debt" below.)
 - `main.py` — added `/llm/stats` FastAPI endpoint + `kentro-server llm-stats` CLI command (queries the running server's endpoint).
 
 Extractor (`packages/kentro_server/src/kentro_server/extraction/ingestor.py`):
@@ -228,6 +228,30 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 ---
 
 ## Resolved tech debt
+
+- **Review-pass fixes (2026-05-03 — `fix-review-findings` branch).** Closed every issue from the parallel Codex / `/review` adversarial reviews that made sense to fix. Highlights:
+  - **HIGH** `Settings.kentro_tenants_json` field was missing — server crashed on boot. Lifespan healthz test now enters the `with TestClient(app)` context so any future startup divergence fails immediately.
+  - **HIGH** `_RoutingLLMClient.extract_entities` used the wrong kwarg name and would crash on first ingest in mixed-provider mode. Renamed to `RoutingLLMClient` (public), aligned the kwarg, exposed `fast_model`/`smart_model` so caching produces stable keys, added three tests that actually invoke the routing path.
+  - **HIGH** Ingestion now rollback-safe: extraction or DB failure deletes the staged blob via `_delete_orphan_blob`. No more orphaned blobs on retry.
+  - **HIGH** `TenantsConfig` validates unique tenant IDs and unique API keys at load time; duplicate keys can no longer silently overwrite the routing table.
+  - `.env~` editor backup deleted; `.gitignore` adds `*~` and `.*~` to prevent recurrence.
+  - Smoke test path-relative skip-gate (`Path(__file__)`-relative instead of cwd-relative).
+  - `kentro/__init__.py` re-exports the user-facing surface so `kentro.Entity`, `kentro.AutoResolver`, etc. work.
+  - `packages/kentro_server/README.md` aligned with the actually-implemented CLI commands.
+  - `pydantic_core.PydanticUndefined` → `pydantic.fields.PydanticUndefined`.
+  - Settings values moved to `kentro.toml` at the repo root (loaded via `TomlConfigSettingsSource`); secrets stay in `.env`.
+  - Source removal extracted into `core/source_removal.py::remove_document` so the smoke test exercises the same code Step 7's `DELETE /documents/{id}` route will call.
+  - Local pre-commit hook at `scripts/git-hooks/pre-commit` runs ruff (lint + format), ty, types parity, and pytest. Install: `git config --local core.hooksPath scripts/git-hooks`.
+  - CLAUDE.md adds: never `raise Exception(...)`, never `except Exception:`, never nested try/except.
+  - 80/80 unit tests + 1 integration smoke test green; ruff and ty clean.
+
+  Reviewer findings intentionally **not** fixed:
+  - `pyproject.toml` has `line-length = 99` and `ignore = ["E501"]`. Kept on purpose: the line-length value drives `ruff format` wrap target, while ignoring `E501` lets long string literals (LLM prompts, error messages) live without per-line `# noqa`. Format-vs-lint distinction is intentional.
+  - Token telemetry on `ExtractionStep` rows still records `0/0`. Documented as a v0.1 deferred item; instructor's structured-output responses don't expose `usage` uniformly across providers.
+  - Atomic write of cache files. Documented as acceptable for v0 (worst case under a crash race is a duplicate inner call; reads recover from corruption).
+  - Tenant API keys stored plaintext in `tenants.json`. Documented as v0-demo-only in the file itself.
+
+- **Module-level singletons retired (2026-05-03).** `get_settings()` / `reset_settings_for_tests()` removed from `settings.py`; `get_llm_client()` / `reset_llm_client_for_tests()` removed from `skills/factory.py`. Replaced with a FastAPI lifespan handler (`@asynccontextmanager`) that constructs `Settings`, `LLMClient`, and `TenantRegistry` once at startup and attaches them to `app.state`. Routes consume them via `Annotated[T, Depends(...)]` aliases (`SettingsDep`, `LLMClientDep`, `TenantRegistryDep`). The `start` CLI command constructs `Settings()` directly (it's not in a request context). 80/80 unit tests still pass with no test changes. See branch `retire-singletons`.
 
 - **Module-level singletons retired (2026-05-03).** `get_settings()` / `reset_settings_for_tests()` removed from `settings.py`; `get_llm_client()` / `reset_llm_client_for_tests()` removed from `skills/factory.py`. Replaced with a FastAPI lifespan handler (`@asynccontextmanager`) that constructs `Settings`, `LLMClient`, and `StoreRegistry` once at startup and attaches them to `app.state`. Routes consume them via `Annotated[T, Depends(...)]` aliases (`SettingsDep`, `LLMClientDep`, `StoreRegistryDep`). The `start` CLI command constructs `Settings()` directly (it's not in a request context). 63/63 unit tests still pass with no test changes. See branch `retire-singletons`.
 - **Codex hardening findings closed (2026-05-03).** (1) Tenant IDs are now validated against `^[A-Za-z0-9_-]+$` and the resolved tenant directory must stay under `state_root`; (2) `FilesystemBlobStore` uses `Path.is_relative_to` and rejects absolute keys; (3) `EntityRow` has a `UNIQUE(type, key)` constraint and `_get_or_create_entity_id` retries via SAVEPOINT on `IntegrityError` so concurrent ingests can't fragment an entity. New tests cover all three. See the gap-fill PR.

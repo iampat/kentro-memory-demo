@@ -37,6 +37,7 @@ class LLMOfflineError(RuntimeError):
 
 # === Structured outputs ===
 
+
 class SkillResolverDecision(BaseModel):
     """Output of a SkillResolver LLM call."""
 
@@ -64,7 +65,9 @@ class ExtractedField(BaseModel):
         ),
     )
     confidence: float | None = Field(
-        default=None, ge=0.0, le=1.0,
+        default=None,
+        ge=0.0,
+        le=1.0,
         description="Optional 0-1 confidence; omit when uncertain.",
     )
 
@@ -92,6 +95,7 @@ class ExtractionResult(BaseModel):
 
 
 # === Client protocol ===
+
 
 class LLMClient(ABC):
     """Provider-agnostic structured-output LLM seam."""
@@ -137,7 +141,9 @@ class OfflineLLMClient(LLMClient):
             reason=self._UNAVAILABLE_REASON,
         )
 
-    def extract_entities(self, *, document_text, registered_schemas, document_label=None, model=None):
+    def extract_entities(
+        self, *, document_text, registered_schemas, document_label=None, model=None
+    ):
         raise LLMOfflineError(
             "OfflineLLMClient.extract_entities called — extraction requires a real LLM backend"
         )

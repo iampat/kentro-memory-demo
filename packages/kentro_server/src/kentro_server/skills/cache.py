@@ -91,7 +91,9 @@ class CachingLLMClient(LLMClient):
                         "value_json": c.value_json,
                         "agent_id": c.written_by_agent_id,
                         "written_at": c.written_at.isoformat(),
-                        "source_document_id": str(c.source_document_id) if c.source_document_id else None,
+                        "source_document_id": str(c.source_document_id)
+                        if c.source_document_id
+                        else None,
                     }
                     for c in candidates
                 ],
@@ -153,7 +155,12 @@ class CachingLLMClient(LLMClient):
 
     def _fingerprint(self, *, method: str, model: str, response_class: str, payload: dict) -> str:
         canonical = json.dumps(
-            {"method": method, "model": model, "response_class": response_class, "payload": payload},
+            {
+                "method": method,
+                "model": model,
+                "response_class": response_class,
+                "payload": payload,
+            },
             sort_keys=True,
             ensure_ascii=False,
         )
@@ -187,7 +194,10 @@ class CachingLLMClient(LLMClient):
     def _log_event(self, kind: str, key: str, model: str) -> None:
         logger.info(
             "[llm] cache %s key=%s model=%s %s",
-            kind, key[:12], model, self.stats.render(),
+            kind,
+            key[:12],
+            model,
+            self.stats.render(),
         )
 
 

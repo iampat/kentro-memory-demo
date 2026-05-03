@@ -7,12 +7,12 @@ requires updating both this test (to allow the specific difference) and the
 """
 
 import inspect
-from enum import EnumMeta
-
-from pydantic import BaseModel
+from enum import Enum, EnumMeta
+from typing import cast
 
 from kentro import types as sdk_types
 from kentro_server.api import types as server_types
+from pydantic import BaseModel
 
 # Symbols that are type aliases (Annotated unions), not classes — Python won't introspect
 # them via `vars()` so we list them explicitly and check they exist on both sides.
@@ -24,14 +24,19 @@ def _public_symbols(mod: object) -> dict[str, object]:
 
 
 def _model_classes(syms: dict[str, object]) -> dict[str, type[BaseModel]]:
-    return {
-        n: v for n, v in syms.items()
-        if inspect.isclass(v) and issubclass(v, BaseModel)
-    }
+    return {n: v for n, v in syms.items() if inspect.isclass(v) and issubclass(v, BaseModel)}
 
 
-def _enum_classes(syms: dict[str, object]) -> dict[str, EnumMeta]:
-    return {n: v for n, v in syms.items() if isinstance(v, EnumMeta)}
+def _enum_classes(syms: dict[str, object]) -> dict[str, type[Enum]]:
+    """Returns enum *classes* (typed as `type[Enum]`, not `EnumMeta`) so iteration
+    over `__members__` yields properly-typed `Enum` instances rather than `object`.
+    Runtime check is `isinstance(v, EnumMeta)` (which matches enum *classes*); the
+    explicit `cast` tells the type checker the same thing."""
+    out: dict[str, type[Enum]] = {}
+    for n, v in syms.items():
+        if isinstance(v, EnumMeta):
+            out[n] = cast(type[Enum], v)
+    return out
 
 
 def test_public_symbols_match() -> None:
@@ -103,8 +108,6 @@ def test_model_field_shapes_match() -> None:
         sdk_sig = _field_signature(sdk_model)
         srv_sig = _field_signature(srv_model)
         if sdk_sig != srv_sig:
-            drift.append(
-                f"  Model {name} drift:\n    SDK:    {sdk_sig}\n    Server: {srv_sig}"
-            )
+            drift.append(f"  Model {name} drift:\n    SDK:    {sdk_sig}\n    Server: {srv_sig}")
     if drift:
         raise AssertionError("Model field drift detected:\n" + "\n".join(drift))

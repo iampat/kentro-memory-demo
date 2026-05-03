@@ -34,16 +34,16 @@ logger = logging.getLogger(__name__)
 
 TENANT_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 DEFAULT_LOCAL_TENANT = TenantConfig(
-    id="local", display_name="Local Dev", api_key="local-dev-key-do-not-share",
+    id="local",
+    display_name="Local Dev",
+    api_key="local-dev-key-do-not-share",
 )
 
 
 def _validate_tenant_id(tenant_id: str, root_dir: Path) -> Path:
     """Reject malformed or path-escaping tenant IDs. Returns the resolved tenant dir."""
     if not TENANT_ID_REGEX.fullmatch(tenant_id):
-        raise ValueError(
-            f"invalid tenant_id {tenant_id!r}: must match {TENANT_ID_REGEX.pattern}"
-        )
+        raise ValueError(f"invalid tenant_id {tenant_id!r}: must match {TENANT_ID_REGEX.pattern}")
     root_resolved = root_dir.resolve()
     tenant_dir = (root_dir / tenant_id).resolve()
     if not tenant_dir.is_relative_to(root_resolved):
@@ -121,9 +121,7 @@ class TenantRegistry:
     def get(self, tenant_id: str) -> TenantStore:
         store = self._stores.get(tenant_id)
         if store is None:
-            raise KeyError(
-                f"unknown tenant_id {tenant_id!r}; configured: {sorted(self._stores)}"
-            )
+            raise KeyError(f"unknown tenant_id {tenant_id!r}; configured: {sorted(self._stores)}")
         return store
 
     def by_api_key(self, api_key: str) -> TenantStore:
