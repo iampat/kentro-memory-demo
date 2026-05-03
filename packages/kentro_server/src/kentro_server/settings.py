@@ -47,21 +47,4 @@ class Settings(BaseSettings):
         return self.kentro_state_dir / ".llm_cache"
 
 
-_singleton: Settings | None = None
-
-
-def get_settings() -> Settings:
-    """Process-wide settings singleton. Mutating env after first call has no effect."""
-    global _singleton
-    if _singleton is None:
-        _singleton = Settings()
-    return _singleton
-
-
-def reset_settings_for_tests() -> None:
-    """Drop the singleton — tests use this to pick up a freshly-monkeypatched env."""
-    global _singleton
-    _singleton = None
-
-
-__all__ = ["Settings", "get_settings", "reset_settings_for_tests"]
+__all__ = ["Settings"]

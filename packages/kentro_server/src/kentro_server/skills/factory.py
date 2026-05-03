@@ -143,26 +143,7 @@ class _RoutingLLMClient(LLMClient):
         )
 
 
-_singleton: LLMClient | None = None
-
-
-def get_llm_client() -> LLMClient:
-    """Process-wide LLMClient singleton. Lazily built from `get_settings()`."""
-    global _singleton
-    if _singleton is None:
-        from kentro_server.settings import get_settings
-        _singleton = make_llm_client(get_settings())
-    return _singleton
-
-
-def reset_llm_client_for_tests() -> None:
-    global _singleton
-    _singleton = None
-
-
 __all__ = [
     "detect_provider",
-    "get_llm_client",
     "make_llm_client",
-    "reset_llm_client_for_tests",
 ]

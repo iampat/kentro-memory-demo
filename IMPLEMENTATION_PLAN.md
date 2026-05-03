@@ -206,25 +206,6 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 
 ---
 
-## Tech debt — singletons to retire
-
-Per `CLAUDE.md` ("No singletons"), the following module-level singletons need to be
-replaced with FastAPI `Depends`-based dependency injection. Schedule the cleanup to
-land alongside Step 7 (HTTP API) since that's when the dependency-injection wiring
-naturally arrives.
-
-- `kentro_server.settings.get_settings()` and `reset_settings_for_tests()`
-  (`packages/kentro_server/src/kentro_server/settings.py`).
-- `kentro_server.skills.factory.get_llm_client()` and `reset_llm_client_for_tests()`
-  (`packages/kentro_server/src/kentro_server/skills/factory.py`).
-
-Plan: in Step 7, build a FastAPI lifespan handler that constructs `Settings` and the
-`LLMClient` once at startup, stores them on `app.state.{settings,llm_client}`, and
-exposes them via `Depends(get_settings_dep)` / `Depends(get_llm_client_dep)`. The
-`/llm/stats` endpoint and the route handlers all use `Depends`. The two `get_*()`
-free functions and their `reset_*` siblings then get deleted; tests use
-`app.dependency_overrides[...]` instead.
-
 ## Open questions / decisions awaiting input
 
 1. **Linux x86_64 Witchcraft build** — unverified locally. QEMU emulation in podman segfaults Rust binaries (TLS issue); Rosetta isn't wired up by this podman version. Two paths: validate on a real GCP e2-medium VM now (~$0.05, ~30 min, definitive) or defer to Step 12. Currently deferred per user direction ("leave aside for now"). Will re-raise before Step 12.
@@ -232,3 +213,9 @@ free functions and their `reset_*` siblings then get deleted; tests use
 ## Decisions locked since the handoff
 
 1. **Kentro ↔ Witchcraft integration: subprocess wrapper around `warp-cli` for v0.** Verified working end-to-end on Mac (CHANGE_LOG 2026-05-02). Per-doc `add` is append-to-TSV + `readcsv → embed → index` (incremental on the embed/index side). Per-doc `remove` is wipe-and-re-ingest at demo scale (~200ms for 6 docs). PyO3 binding deferred to v0.1. Rationale: zero new toolchain in kentro's build, no Rust in CI/deploy, simple ops story. Handoff unchanged — implementation detail only.
+
+---
+
+## Resolved tech debt
+
+- **Module-level singletons retired (2026-05-03).** `get_settings()` / `reset_settings_for_tests()` removed from `settings.py`; `get_llm_client()` / `reset_llm_client_for_tests()` removed from `skills/factory.py`. Replaced with a FastAPI lifespan handler (`@asynccontextmanager`) that constructs `Settings`, `LLMClient`, and `StoreRegistry` once at startup and attaches them to `app.state`. Routes consume them via `Annotated[T, Depends(...)]` aliases (`SettingsDep`, `LLMClientDep`, `StoreRegistryDep`). The `start` CLI command constructs `Settings()` directly (it's not in a request context). 63/63 unit tests still pass with no test changes. See branch `retire-singletons`.
