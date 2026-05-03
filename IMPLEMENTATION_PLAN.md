@@ -279,23 +279,97 @@ Companion bootstrap items shipped in the same PR:
 - `kentro.rules.render_rule_as_rego(rule)` added (display sophistication only — never parsed). Per-variant Rego shapes: `FieldReadRule` allow → `allow { ... }`, deny → `deny[msg]`; `WriteRule` omits `field` for wildcards; `EntityVisibilityRule` includes `entity_key` when set; `SkillResolverSpec` with "written/verbal" prompts uses the canonical demo Rego shape, otherwise generic `skill_pick` fallback. 10 new tests in `rules_helpers_test.py`.
 - `Taskfile.yaml` at repo root: `dev`, `open`, `seed`, `reset`, `test`, `test:integration`, `lint`, `format`, `format:check`, `typecheck`, `gates`, `smoke`. Replaces the proposed `deploy.sh`.
 
-Still to come for Step 10 done:
-- Wire the prototype's data layer to the real HTTP API (currently `data.js` ships canned fixtures).
-- Two-pane policy editor (NL chat + access matrix) hooked to `POST /rules/parse` + `POST /rules/apply`, using `viz.access_matrix()` and `viz.rule_diff()`.
-- `<TicketBadge>` + `<EscalationToast>` once the `SkillResolverDecision.actions` extension lands (see "Workflow-aware Skills" in the deferred section below).
+**Sub-decision resolved 2026-05-03:** No Vite, no Next.js. The prototype ships React via CDN + Babel-in-browser inside `static/index.html`. Zero build step, zero npm. Trade: in-browser Babel is slow on first load (~600ms) and we lose tree-shaking; gain: the demo path is `task dev → task open` and nothing else. Reconsider only if bundle size becomes a real demo problem.
 
-Open sub-decision (resolve at the start of Step 10): keep Next.js with `output: 'export'` (static export) OR drop Next.js for Vite + React + Tailwind + shadcn/ui (lighter, no SSR/middleware features we'd be losing). Recommendation: Vite — Next.js's SSR is value we don't use here, and the static-export path is friction we don't need.
+### Step 10 staged execution plan (locked 2026-05-03)
 
-**Policy editor design (locked per Decision 2 above):**
+The work from "prototype with hardcoded `data.js`" to "real working server, no canned data" is broken into six small PRs. Each PR is independently mergeable and leaves the demo in a working state. Sequence is partial-order: PR 1 unblocks 2, 2 unblocks 3, 3 unblocks 4, 5 can run in parallel with 4, 6 closes the gate.
 
-Two-pane layout for the rules-editing screen.
+**Locked agent-auth UX (applies to PRs 2-6):** Global header switcher (`Admin` / `Sales` / `CS`) controls **read-context only**. Admin-only actions (apply rules, register schema, delete docs) **auto-elevate** to the admin token regardless of the switcher position, with a small `↑ admin` badge on the button so the elevation is visible. Rationale: the demo's whole point is "different agents see different things"; the gate itself is proven by unit tests + the codex audit. Forcing the demoer to flip the switcher every time they apply a rule wastes seconds per take and breaks narrative flow. Three localStorage keys: `kentroAdminKey`, `kentroSalesKey`, `kentroCsKey` — auto-populated from `tenants.json` on first load via a one-time `GET /demo/keys` admin endpoint (safe in v0; the keys are committed to the repo anyway).
 
-- **Left pane — NL chat.** Admin types plain English. UI calls `POST /rules/parse`, displays the compiled `parsed_ruleset` + `intents` + `notes`. "Apply" calls `POST /rules/apply`, version bumps.
-- **Right pane — structured policy view.** Default rendering is the access matrix from `viz.access_matrix()`. A collapsible panel below shows the sectioned-by-rule-type detail (one section per `FieldReadRule` / `EntityVisibilityRule` / `WriteRule` / `ConflictRule`). Header shows `version N · applied <when> by <who> · summary`. On apply, the right pane re-renders with the new structure and the changed rows highlight (added green `+`, removed red `−`) using `viz.rule_diff()`.
+#### PR 10-1 — Foundation (codex bundle + seed-with-ACLs + missing read endpoints) — **DONE**
 
-Critical: this is NOT a JSON editor and NOT a PBAC-language editor. The structured view IS the language — it makes the four-rule-type model visible as architecture, not as a config blob. See Decision 2.6 for the rationale.
+**Built:** All 7 items in the original scope landed in one PR. Specific bits:
+- Alembic scaffold under `packages/kentro_server/src/kentro_server/migrations/` with single shared `versions/`. Initial revision `9e3efe52ae84_initial_baseline.py` autogen'd from current models. `env.py` iterates every tenant DB; `store/migrations.py::upgrade_to_head(path)` called from `TenantStore.__init__` replaces `metadata.create_all()`.
+- `Settings.kentro_prod_mode` retired; `Settings.kentro_allow_demo_keys` added (default `False`). `_enforce_demo_key_opt_in` in main.py refuses boot on demo keys without explicit opt-in.
+- `core/write.py::write_fields_bulk(...)` for atomic multi-field writes; `routes/memory.py::remember` rewritten to use it. Test `test_remember_atomic_no_partial_writes_on_field_denial` proves no partial state on per-field denial.
+- `kentro_server.demo.ruleset.initial_demo_ruleset()` returns 30-rule canonical Scene-1 world. `seed-demo` CLI POSTs it after schema register, before doc ingestion. `--skip-rules` opt-out preserved for tests.
+- `GET /entities/{type}` (ACL-filtered) + `GET /documents` (sorted descending by created_at) added. New SDK types `EntitySummary`, `EntityListResponse`, `DocumentSummary`, `DocumentListResponse`. Both routes used by the upcoming Stage A panels.
+- `GET /demo/keys` admin endpoint (admin-only AND opt-in-only) for the agent-switcher localStorage bootstrap. New `routes/demo.py` + `demo_router`.
+- Taskfile entries: `task migrate`, `task migrate:revision -- "message"`, `task reset-and-seed`, `task reset-and-seed:stop`. `task dev` and `task reset-and-seed` set `KENTRO_ALLOW_DEMO_KEYS=true` so local dev still "just works".
 
-**What was built:** _pending_
+**End-to-end verified:** `task reset-and-seed` produces a tenant with 4 entity types + 8 documents + 30 ACL rules. Smoke test confirms `/entities/AuditLog` returns `[]` to sales (hidden) and populated rows to admin; `/demo/keys` returns 200 to admin + 403 to sales.
+
+**Migration note:** Existing pre-PR-#18 tenant DBs (without `source_class` and without `alembic_version`) need `task reset` before first server start under the Alembic-managed schema. Deferred-codex memory note retired.
+
+#### PR 10-1 — original scope outline (kept for reference)
+
+Bundles the deferred codex 3-finding fix (since Stage A immediately starts depending on per-tenant DB shape and we don't want to add Alembic AFTER we've ingested real data twice).
+
+- Codex critical: refuse boot when `local-*-do-not-share` keys present in `tenants.json` unless `KENTRO_ALLOW_DEMO_KEYS=true` set explicitly. Inverts the failure mode.
+- Codex high: `/memory/remember` wraps the per-field `write_field()` loop in one DB transaction with all-or-nothing rollback. Per-field ACL gate stays.
+- Codex high: Alembic with single shared `alembic/versions/`. `env.py` iterates `TenantRegistry.known_tenants()` and runs `command.upgrade(cfg, "head")` per-tenant DB. `metadata.create_all()` removed from `tenant_store.py`. Boot guard refuses start on alembic-head drift with copy-paste fix message. Initial revisions: `0001_initial` (autogen baseline) + `0002_add_document_source_class` (so DBs that predate PR #18 upgrade cleanly).
+- Extend `kentro-server seed-demo` to ALSO `POST /rules/apply` the demo's initial ACLs: Sales reads all Customer fields, CS reads `Customer.{name, contact, support_tickets}` only, AuditLog hidden from Sales, latest-write conflict resolver. Right pane non-empty on a fresh tenant.
+- Add `task migrate` — wraps `uv run alembic upgrade head` against every tenant DB under `<state_dir>/`. Idempotent. The pre-commit hook + boot guard call this when drift is detected; manual users run it after pulling a model change. Also `task migrate:revision -- "message"` for autogenerating a new revision from the current models.
+- Add `task reset-and-seed` — `task reset → start server → wait for /healthz → task migrate → task seed`. One command from cold to fully-loaded.
+- New server endpoints Stage A needs: `GET /documents` (list, with optional `source_class` + `agent_id` filters), `GET /entities/{type}` (list keys + summary by type). Both read-only, ACL-gated per active agent.
+- New admin-only endpoint: `GET /demo/keys` returns the per-agent keys for the current tenant so the UI can pre-populate localStorage. Refuses to respond unless `KENTRO_ALLOW_DEMO_KEYS=true` (so it can never leak in prod).
+
+**Verification:** new endpoints have unit tests; `task reset-and-seed` produces a tenant with 4 entity types registered + 4 docs ingested + 4 ACL rules applied; alembic upgrade against an existing pre-PR-#18 DB succeeds; demo-key boot guard refuses by default and accepts with `KENTRO_ALLOW_DEMO_KEYS=true`.
+
+#### PR 10-2 — Stage A (wire reads + agent-auth foundation)
+
+- `static/api.js` (new): `window.K.api` with `setActingAs(agent)`, `getCurrentAgent()`, `listDocuments()`, `readEntity(type, key)`, `listEntities(type)`, `getRules()`, `listSchema()`, `_fetch(path, opts)` that injects the right bearer token (agent for reads, admin for admin-only paths).
+- Header agent switcher: dropdown showing the three agents with their ACL profile in micro-text.
+- Replace every `KENTRO_DATA.*` consumer in `panels.jsx`, `tweaks-panel.jsx`, `app.jsx` with an `await window.K.api.*` call. React state with proper loading + error UI.
+- `data.js` stays in the repo as a fallback path **only** when API returns empty — so demoers without a populated tenant still see something. Falls out in PR 10-4.
+
+**Verification:** with the server populated by `task reset-and-seed`, every panel renders server data; switching agents in the dropdown causes deal_size to disappear from the CS view but remain in the Sales view (proving ACL is being respected through real fetch); Network tab shows `/entities/...`, `/documents`, `/rules` requests; clicking through with `data.js` deleted from disk still works for populated tenants.
+
+#### PR 10-3 — Stage B (wire writes + policy editor)
+
+- `window.K.api` write surface: `applyRules(ruleset)`, `parseNL(text)`, `writeField(...)`, `ingestDocument(content, label, sourceClass)`, `deleteDocument(id)`. Admin-only paths force admin token; UI shows `↑ admin` badge.
+- Two-pane policy editor:
+  - Left = NL chat → `POST /rules/parse` (shows `parsed_ruleset` + `intents` + `notes`) → `Apply` → `POST /rules/apply`, version bumps.
+  - Right = access matrix from `viz.access_matrix()` (computed server-side via new `GET /viz/access-matrix?ruleset_version=N` endpoint, OR computed in the SDK in JS — pick at PR start).
+- Sectioned-by-rule-type panel below the matrix; uses `render_rule()` for one-line text + `render_rule_as_rego()` for the expandable Rego snippet.
+- Diff highlighting on apply: `viz.rule_diff(old, new)` drives green `+` / red `−` overlays for ~3s.
+- Document list gains `Delete` button (admin-only); ingestion form gains `Upload` button + source-class radio.
+
+**Verification:** `task reset-and-seed` then click through all 9 demo beats: ingest transcript → see entity → ingest email → see conflict banner → admin pastes "written outweighs verbal" → rule applied → conflict resolves → delete email → conflict re-emerges → fall back to $250K. Every transition causes the appropriate `/documents`, `/rules/apply`, `/entities/.../...` request, observable in Network tab. Sales-view shows deal_size after Scene 4; CS-view does not.
+
+#### PR 10-4 — Stage C (delete `data.js`)
+
+- Remove `KENTRO_DATA` references from `helpers.js`, `panels.jsx`, `tweaks-panel.jsx`, `app.jsx`. No fallback paths.
+- `git rm static/data.js`.
+- Empty-tenant UX: when `listSchema()` returns no types or `listDocuments()` returns no docs, show a centered "Seed demo data" button. Clicking calls a new `POST /demo/seed` admin route (server-side equivalent of the `seed-demo` CLI — register schemas, ingest corpus, apply demo ACLs, all in one transaction-per-tenant).
+- Update `Taskfile.yaml` `seed` description to mention the in-UI alternative.
+
+**Verification:** `git grep KENTRO_DATA` returns zero hits; `task reset && task dev` shows the empty UI with the seed button; clicking seed populates the tenant and re-renders without page reload; deleting `static/data.js` from disk doesn't break anything.
+
+#### PR 10-5 — Workflow-aware Skills
+
+- Server: extend `SkillResolverDecision` (in `skills/llm_client.py`) with `actions: tuple[SkillAction, ...] = ()`. `SkillAction` is a discriminated union: `WriteEntityAction(entity_type, entity_key, field_name, value_json)` and `NotifyAction(channel, message)`.
+- `core/resolve.py`: after a `SkillResolver` returns its decision, walk `actions` and execute each. `WriteEntityAction` goes through `write_field()` (so the same ACL gate applies — Skills cannot bypass governance). `NotifyAction` for v0 = console log + websocket event broadcast on `/ws/events`.
+- New `/ws/events` websocket endpoint streams `{type: "notify", channel, message, ts}` and `{type: "rule_applied", version, by}` events. Lifespan-attached, no singletons.
+- UI: new `<TicketBadge>` component (renders inline next to a conflict-resolved field when the resolution wrote a `Ticket` entity), new `<EscalationToast>` component (subscribes to `/ws/events`, renders fade-in toast for `notify` events).
+- TODOs at the two existing sites in `skills/llm_client.py` and `core/resolve.py` removed.
+
+**Verification:** Scene 4 demo beat — admin applies "written outweighs verbal AND create Ticket on conflicts >$200K AND notify sales-lead" rule; ingest email triggering conflict resolution; in the UI, see (a) the conflict resolves, (b) a `Ticket` entity appears in the entity list, (c) `<TicketBadge>` renders next to deal_size, (d) `<EscalationToast>` fades in saying "sales-lead notified". Memory note `pending_workflow_aware_skills.md` retired.
+
+#### PR 10-6 — Step 11 (synthetic corpus + scenario test)
+
+- `scripts/generate_corpus.py` already-extant (8 docs in `examples/synthetic_corpus/`); audit + regenerate any docs that don't match the current 4-entity schema; idempotent re-run cached against the LLM cache.
+- `tests/integration/scenario_test.py`: walks all 9 demo beats end-to-end, asserts on observable state at each beat (ACL boundaries, conflict creation, conflict resolution, source removal, fallback). Uses real LLM (gated on `ANTHROPIC_API_KEY`, `pytest.skip` otherwise).
+- Memory notes retired: `pending_dev_server_polish.md` (deferred to v0.1; if the user wants it, surface explicitly), `pending_witchcraft_wiring.md` (decide YES/NO based on whether scenario_test needs semantic search — likely NO).
+
+**Verification:** `uv run pytest tests/integration/scenario_test.py -v` green against real Anthropic; <60s wall-clock with cache warm; one curl-equivalent assertion per demo beat documented in the test docstring.
+
+### Step 10 done definition
+
+All six PRs merged. `task reset-and-seed && task dev && task open` produces a working demo where every UI action causes a real server request, every agent sees the right slice, `data.js` is deleted, and the scenario test passes against real LLM. **Post-merge validation tier matrix** (mirrors Step 7's): T1 server boot + smoke endpoints, T2 unit tests, T3 `task reset-and-seed` end-to-end, T3.5 kill+restart server preserves state including alembic version, T4 manual demo walkthrough via Chrome MCP, T5 scenario_test green.
+
+**What was built:** _pending — see Step 10 staged execution plan above._
 
 ---
 
@@ -340,10 +414,7 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
   kills the child, free-port allocation if 8000 is taken). Memory note saved at
   `pending_dev_server_polish.md`.
 - **Workflow-aware Skills — `SkillResolverDecision.actions` extension.** The Scene 4 demo beat ("Ticket #142 created · sales-lead notified · Slack #deals-review") is described in `demo.md` / `implementation-handoff.md` / `memory.md` as the workflow-trigger thread, but the server-side surface to support it is not yet built. Concretely: extend `SkillResolverDecision` (in `kentro_server/skills/llm_client.py`) with an optional `actions: tuple[SkillAction, ...] = ()` field where each `SkillAction` is `{type: "write_entity"|"notify", payload: dict}`; in `core/resolve.py`, after a `SkillResolver` returns its decision, walk `actions` and execute each through the same `write_field` ACL gate (Skills cannot bypass governance). Notification primitive for v0 = console log + websocket event the frontend renders as a fade-in toast; real Slack integration is v0.1. **Must land before Step 10 begins** — UI's `<TicketBadge>` + `<EscalationToast>` components depend on this surface. TODOs marked in code at the two sites above. Estimated cost: ~150 LOC + ~half day. Reframing rationale: HumanReviewResolver was originally a separate Python wrapper class; reframed 2026-05-03 to "skills carry the workflow" so admins author workflow logic in markdown, not Python — aligns with the existing skill-loader pattern.
-- **Codex 2026-05-03 review — three findings bundled into one deferred PR.** Whole-codebase adversarial review on 2026-05-03 (logged in `CHANGE_LOG.md`) flagged three real issues. User decision 2026-05-03: bundle all three into a single PR, **defer to later** so Step 10 UI work can proceed without churn. When picked up, the PR scope is:
-  1. **[critical] Insecure-by-default auth.** `kentro_prod_mode=False` default lets the server boot with the committed `local-*-do-not-share` keys on a non-loopback bind. Fix: refuse boot when any `local-*-do-not-share` key is present in `tenants.json` unless `KENTRO_ALLOW_DEMO_KEYS=true` is set explicitly. Inverts the failure mode from "operator must remember to opt in" to "operator must explicitly opt out". Site: `packages/kentro_server/src/kentro_server/settings.py:63-68` + the boot guard in `main.py`.
-  2. **[high] `/memory/remember` non-atomic.** Loop in `routes/memory.py:95-119` calls `write_field()` once per Note field (subject / predicate / object_json / source_label); each call commits independently, so a deny mid-loop persists a half-written Note that reads as real state. Fix: wrap the field-loop in one DB transaction with all-or-nothing rollback semantics, OR collapse the four writes into one stored payload. Prefer the first — keeps the existing per-field ACL gate intact.
-  3. **[high] Tenant SQLite has no migration mechanism.** `metadata.create_all()` doesn't `ALTER TABLE` — `DocumentRow.source_class` (added 2026-05-03 in PR #18) needs manual `ALTER TABLE` against existing DBs. **Fix: adopt Alembic** with a single shared `alembic/versions/` directory (every tenant has the same schema by design); `env.py` iterates `TenantRegistry.known_tenants()` and runs `command.upgrade(cfg, "head")` per-tenant DB. Replace `metadata.create_all()` in `tenant_store.py`. Boot guard: refuse start if any tenant DB's alembic head ≠ code's expected head, with a clear "run `task migrate`" copy-paste message. Initial revisions: `0001_initial` (auto-generated baseline of current models) + `0002_add_document_source_class` (so existing DBs upgrade cleanly without delete-and-rebuild). Estimated ~2-3 hours including per-tenant env.py loop, boot guard, tests. Decision recorded so we don't re-litigate Alembic-vs-handroll-version-row when the PR is picked up.
+- ~~**Codex 2026-05-03 review — three findings bundled into one deferred PR.**~~ **CLOSED 2026-05-03 by PR 10-1.** All three findings landed: auth-default inverted (`kentro_allow_demo_keys`), `/memory/remember` atomic (via `write_fields_bulk`), Alembic with single shared `versions/` (initial baseline `9e3efe52ae84`). Memory note `pending_codex_2026_05_03_fix_pr.md` retired.
 - **Witchcraft wiring into ingestion.** The locked decision (§Decisions §1)
   is "subprocess wrapper around `warp-cli`" — but as of 2026-05-03, Witchcraft is
   NOT actually called from the ingestion path. The per-tenant store's `witchcraft/`

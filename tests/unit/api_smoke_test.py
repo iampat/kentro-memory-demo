@@ -276,6 +276,154 @@ def test_write_then_read_roundtrips(client: TestClient) -> None:
         )
 
 
+def test_list_entities_returns_only_visible_keys(client: TestClient) -> None:
+    """`GET /entities/{type}` lists keys of that type, filtered by EntityVisibilityRule.
+
+    Setup: register Customer, write two rows (Acme, Globex). Apply a ruleset
+    that hides Globex from `sales` but allows Acme. Asserts:
+      - admin sees both
+      - sales sees only Acme
+    """
+    client.post(
+        "/schema/register",
+        headers=_admin(),
+        json={
+            "type_defs": [
+                EntityTypeDef(
+                    name="Customer",
+                    fields=(FieldDef(name="name", type_str="str"),),
+                ).model_dump(mode="json")
+            ]
+        },
+    )
+    # Permissive ruleset for ingestion + visibility on Acme for sales but not Globex.
+    rules = (
+        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        FieldReadRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
+        ),
+        EntityVisibilityRule(
+            agent_id="sales", entity_type="Customer", entity_key="Acme", allowed=True
+        ),
+        EntityVisibilityRule(
+            agent_id="sales", entity_type="Customer", entity_key="Globex", allowed=False
+        ),
+        FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
+    )
+    client.post(
+        "/rules/apply",
+        headers=_admin(),
+        json={"ruleset": RuleSet(rules=rules).model_dump(mode="json")},
+    )
+    for key in ("Acme", "Globex"):
+        client.post(
+            f"/entities/Customer/{key}/name",
+            headers=_admin(),
+            json={"value_json": f'"{key}"'},
+        )
+
+    admin_view = client.get("/entities/Customer", headers=_admin()).json()
+    if admin_view["entity_type"] != "Customer" or len(admin_view["entities"]) != 2:
+        raise AssertionError(f"admin should see both keys, got {admin_view!r}")
+    keys_admin = {e["key"] for e in admin_view["entities"]}
+    if keys_admin != {"Acme", "Globex"}:
+        raise AssertionError(f"admin keys mismatch: {keys_admin}")
+
+    sales_view = client.get("/entities/Customer", headers=_agent()).json()
+    sales_keys = {e["key"] for e in sales_view["entities"]}
+    if sales_keys != {"Acme"}:
+        raise AssertionError(f"sales should see only Acme (Globex hidden), got {sales_keys}")
+
+
+def test_list_documents_after_ingest(client: TestClient, fake_llm: FakeLLM) -> None:
+    """`GET /documents` returns ingested sources + field_write_count > 0 for each."""
+    fake_llm.extraction_result = ExtractionResult(
+        entities=(
+            ExtractedEntity(
+                entity_type="Customer",
+                key="Acme",
+                fields=(ExtractedField(field_name="name", value_json='"Acme Corp"'),),
+            ),
+        )
+    )
+    client.post(
+        "/schema/register",
+        headers=_admin(),
+        json={
+            "type_defs": [
+                EntityTypeDef(
+                    name="Customer",
+                    fields=(FieldDef(name="name", type_str="str"),),
+                ).model_dump(mode="json")
+            ]
+        },
+    )
+    _grant_access_for_ingestion(client)
+    r = client.post(
+        "/documents",
+        headers=_admin(),
+        json={"content": "Acme update", "label": "doc1.md", "source_class": "email"},
+    )
+    if r.status_code != 200:
+        raise AssertionError(f"ingest failed: {r.status_code} {r.text}")
+
+    listing = client.get("/documents", headers=_admin()).json()
+    if len(listing["documents"]) != 1:
+        raise AssertionError(f"expected 1 doc, got {listing!r}")
+    doc = listing["documents"][0]
+    if doc["label"] != "doc1.md" or doc["source_class"] != "email":
+        raise AssertionError(f"label/source_class mismatch: {doc!r}")
+    if doc["field_write_count"] < 1:
+        raise AssertionError(f"expected at least 1 field write per ingested doc, got {doc!r}")
+
+
+def test_demo_keys_returns_all_agents_when_opted_in(client: TestClient) -> None:
+    """`GET /demo/keys` returns the per-agent bearer tokens; admin-only + opt-in.
+
+    Test fixture sets `KENTRO_ALLOW_DEMO_KEYS=true` via the parent conftest's
+    isolated_state. Non-admin call → 403; missing opt-in → 404.
+    """
+    r = client.get("/demo/keys", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"admin /demo/keys should be 200, got {r.status_code}: {r.text}")
+    body = r.json()
+    if body["tenant_id"] != "local":
+        raise AssertionError(f"tenant_id should be 'local', got {body!r}")
+    agent_ids = {a["agent_id"] for a in body["agents"]}
+    if "ingestion_agent" not in agent_ids or "sales" not in agent_ids:
+        raise AssertionError(f"expected admin+sales agents, got {agent_ids}")
+
+    # Non-admin → 403.
+    r = client.get("/demo/keys", headers=_agent())
+    if r.status_code != 403:
+        raise AssertionError(f"non-admin should be 403, got {r.status_code}")
+
+
+def test_demo_keys_404_without_opt_in(
+    isolated_state: None,
+    fake_llm: FakeLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without KENTRO_ALLOW_DEMO_KEYS, /demo/keys returns 404 even for an admin.
+
+    Constructs a fresh TestClient INSIDE the test body so the lifespan re-reads
+    the (now-unset) env var. The conftest's `isolated_state` already set it,
+    so we delenv before constructing the client.
+    """
+    monkeypatch.delenv("KENTRO_ALLOW_DEMO_KEYS", raising=False)
+    app.dependency_overrides[get_llm_client] = lambda: fake_llm
+    try:
+        with TestClient(app) as c:
+            r = c.get("/demo/keys", headers=_admin())
+            if r.status_code != 404:
+                raise AssertionError(
+                    f"/demo/keys without opt-in should be 404, got {r.status_code}: {r.text}"
+                )
+    finally:
+        app.dependency_overrides.pop(get_llm_client, None)
+
+
 def test_entity_visibility_denial_hides_all_fields(client: TestClient) -> None:
     """A denying EntityVisibilityRule must HIDE every declared field on the entity."""
     client.post(
@@ -407,6 +555,84 @@ def test_remember_returns_permission_denied_before_writing(client: TestClient) -
         raise AssertionError(f"remember should return 200 with PD payload: {r.status_code}")
     if r.json()["status"] != "permission_denied":
         raise AssertionError(f"expected permission_denied, got {r.json()!r}")
+
+
+def test_remember_atomic_no_partial_writes_on_field_denial(client: TestClient) -> None:
+    """Codex 2026-05-03 high finding: a per-field denial mid-loop must NOT persist
+    the fields that were written before the denial.
+
+    Setup: grant write on Note (so the wildcard write check passes) BUT explicitly
+    DENY write on Note.object_json. The previous loop-and-commit-each implementation
+    would persist `subject` and `predicate`, then PD on `object_json`, leaving a
+    half-written Note that read as real state. The new `write_fields_bulk` short-
+    circuits up-front: zero writes, zero entity rows.
+    """
+    _grant_access_for_ingestion(client)
+    # Tighten: deny object_json write specifically.
+    client.post(
+        "/rules/apply",
+        headers=_admin(),
+        json={
+            "ruleset": RuleSet(
+                rules=(
+                    EntityVisibilityRule(
+                        agent_id="ingestion_agent", entity_type="Note", allowed=True
+                    ),
+                    WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="object_json",
+                        allowed=False,
+                    ),
+                    FieldReadRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="subject",
+                        allowed=True,
+                    ),
+                    FieldReadRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="predicate",
+                        allowed=True,
+                    ),
+                    FieldReadRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="object_json",
+                        allowed=True,
+                    ),
+                )
+            ).model_dump(mode="json")
+        },
+    )
+
+    r = client.post(
+        "/memory/remember",
+        headers=_admin(),
+        json={"subject": "atomic_test", "predicate": "is", "object_json": "denied"},
+    )
+    if r.status_code != 200 or r.json()["status"] != "permission_denied":
+        raise AssertionError(f"expected PD response, got {r.status_code}: {r.json()!r}")
+
+    # No FIELD WRITES must have landed — atomicity means subject/predicate are NOT
+    # stored even though they pre-pass ACL on their own. (The route returns a synthetic
+    # EntityRecord for any (type, key) regardless of whether the entity row exists, so
+    # we check field statuses rather than the response code.)
+    read = client.get("/entities/Note/atomic_test", headers=_admin())
+    if read.status_code != 200:
+        raise AssertionError(
+            f"GET /entities/Note/atomic_test should be 200, got {read.status_code}"
+        )
+    fields_seen = read.json()["fields"]
+    for fname in ("subject", "predicate", "object_json"):
+        f = fields_seen.get(fname)
+        if f is None or f.get("status") != "unknown":
+            raise AssertionError(
+                f"atomic remember failure must leave field {fname!r} as 'unknown' "
+                f"(no value written); got {f!r}"
+            )
 
 
 # === Rules ===========================================================================

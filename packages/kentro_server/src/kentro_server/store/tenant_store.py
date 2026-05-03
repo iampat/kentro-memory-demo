@@ -24,11 +24,13 @@ from pathlib import Path
 from typing import Self
 
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
-# Importing models here registers them with SQLModel.metadata so create_all picks them up.
+# Importing models here registers them with SQLModel.metadata so the alembic
+# autogenerate plugin (in `migrations/env.py`) sees every table.
 from kentro_server.store import models  # noqa: F401
 from kentro_server.store.blobs import FilesystemBlobStore
+from kentro_server.store.migrations import upgrade_to_head
 from kentro_server.store.tenant_config import AgentConfig, TenantConfig, TenantsConfig
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,19 @@ DEFAULT_LOCAL_TENANT = TenantConfig(
         AgentConfig(
             id="ingestion_agent",
             api_key="local-ingestion-do-not-share",
+            display_name="Ingestion Agent",
             is_admin=True,
         ),
-        AgentConfig(id="sales", api_key="local-sales-do-not-share"),
-        AgentConfig(id="customer_service", api_key="local-cs-do-not-share"),
+        AgentConfig(
+            id="sales",
+            api_key="local-sales-do-not-share",
+            display_name="Sales Agent",
+        ),
+        AgentConfig(
+            id="customer_service",
+            api_key="local-cs-do-not-share",
+            display_name="Customer Service Agent",
+        ),
     ),
 )
 
@@ -78,11 +89,17 @@ class TenantStore:
         self.docs_dir.mkdir(exist_ok=True)
         self.witchcraft_dir.mkdir(exist_ok=True)
 
+        # Bring the DB up to head BEFORE we hand back an engine. This replaces
+        # the previous `SQLModel.metadata.create_all()` call. For a fresh DB
+        # this creates every table at the current revision and stamps the
+        # `alembic_version` table; for an existing DB at head it's a no-op.
+        # An existing DB that's BEHIND head will be migrated forward in place.
+        upgrade_to_head(self._sqlite_path)
+
         self._engine = create_engine(
             f"sqlite:///{self._sqlite_path}",
             connect_args={"check_same_thread": False},
         )
-        SQLModel.metadata.create_all(self._engine)
 
         self.blobs = FilesystemBlobStore(self.docs_dir)
 

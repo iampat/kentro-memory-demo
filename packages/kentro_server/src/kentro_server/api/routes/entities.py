@@ -1,5 +1,6 @@
 """Entity read/write routes.
 
+- `GET  /entities/{type}` — list entities of one type (ACL-filtered).
 - `GET  /entities/{type}/{key}` — read with the default `AutoResolver`.
 - `POST /entities/{type}/{key}/read` — read with a non-default `ResolverSpec`
   (body is `ReadRequest`). POST because a SkillResolverSpec carries a
@@ -11,7 +12,15 @@
 import logging
 
 from fastapi import APIRouter
-from kentro.types import AutoResolverSpec, EntityRecord, WriteResult
+from kentro.acl import evaluate_entity_visibility
+from kentro.types import (
+    AutoResolverSpec,
+    EntityListResponse,
+    EntityRecord,
+    EntitySummary,
+    WriteResult,
+)
+from sqlmodel import col, select
 
 from kentro_server.api.auth import PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep
@@ -19,10 +28,52 @@ from kentro_server.api.dtos import ReadRequest, WriteRequest
 from kentro_server.core.read import read_entity
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.write import write_field
+from kentro_server.store.models import EntityRow, FieldWriteRow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/entities", tags=["entities"])
+
+
+@router.get("/{entity_type}", response_model=EntityListResponse)
+def list_entities_of_type(
+    entity_type: str,
+    principal: PrincipalDep,
+) -> EntityListResponse:
+    """List entities of one type, filtered by `EntityVisibilityRule` for the caller.
+
+    Used by the demo UI to populate left-pane lists per entity type. Hidden
+    entities (per ACL) are dropped from the response — same default-deny shape
+    as field reads. `field_count` is the count of distinct (live) field writes
+    on the entity, surfacing "[N fields]" badges without per-key reads.
+    """
+    ruleset = load_active_ruleset(principal.store)
+    summaries: list[EntitySummary] = []
+    with principal.store.session() as session:
+        rows = session.exec(
+            select(EntityRow).where(EntityRow.type == entity_type).order_by(EntityRow.key)
+        ).all()
+        for row in rows:
+            visibility = evaluate_entity_visibility(
+                entity_type=row.type,
+                entity_key=row.key,
+                agent_id=principal.agent_id,
+                ruleset=ruleset,
+            )
+            if not visibility.allowed:
+                continue
+            field_count = len(
+                set(
+                    session.exec(
+                        select(FieldWriteRow.field_name).where(
+                            FieldWriteRow.entity_id == row.id,
+                            ~col(FieldWriteRow.superseded),
+                        )
+                    ).all()
+                )
+            )
+            summaries.append(EntitySummary(type=row.type, key=row.key, field_count=field_count))
+    return EntityListResponse(entity_type=entity_type, entities=tuple(summaries))
 
 
 @router.get("/{entity_type}/{entity_key}", response_model=EntityRecord)

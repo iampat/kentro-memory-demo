@@ -10,6 +10,7 @@ Routers are mounted into the FastAPI app from `kentro_server.main` via
 """
 
 from kentro_server.api.routes import (
+    demo_router,
     documents_router,
     entities_router,
     memory_router,
@@ -18,6 +19,7 @@ from kentro_server.api.routes import (
 )
 
 __all__ = [
+    "demo_router",
     "documents_router",
     "entities_router",
     "memory_router",

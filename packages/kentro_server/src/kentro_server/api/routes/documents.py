@@ -1,10 +1,12 @@
-"""POST /documents — ingest a markdown source; DELETE /documents/{id} — remove + re-resolve."""
+"""POST /documents — ingest a markdown source; DELETE /documents/{id} — remove + re-resolve;
+GET /documents — list ingested sources for the demo UI."""
 
 import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from kentro.types import IngestionResult
+from kentro.types import DocumentListResponse, DocumentSummary, IngestionResult
+from sqlmodel import col, select
 
 from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep
@@ -12,10 +14,41 @@ from kentro_server.api.dtos import IngestRequest
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.source_removal import remove_document
 from kentro_server.extraction import ingest_document
+from kentro_server.store.models import DocumentRow, FieldWriteRow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+@router.get("", response_model=DocumentListResponse)
+def list_documents(principal: PrincipalDep) -> DocumentListResponse:
+    """List every document in the tenant — used by the demo UI's source pane.
+
+    Not ACL-filtered today: documents are tenant-scoped (any agent on the tenant
+    sees the full list). The fields returned are metadata only (label, source
+    class, hash) — never the blob contents. Per-document blob fetch + per-write
+    permissions still gate access to derived field data.
+    """
+    summaries: list[DocumentSummary] = []
+    with principal.store.session() as session:
+        rows = session.exec(select(DocumentRow).order_by(col(DocumentRow.created_at).desc())).all()
+        for row in rows:
+            field_writes = session.exec(
+                select(FieldWriteRow).where(FieldWriteRow.source_document_id == row.id)
+            ).all()
+            summaries.append(
+                DocumentSummary(
+                    id=str(row.id),
+                    label=row.label,
+                    source_class=row.source_class,
+                    content_hash=row.content_hash,
+                    created_at=row.created_at.isoformat(),
+                    blob_key=row.blob_key,
+                    field_write_count=len(field_writes),
+                )
+            )
+    return DocumentListResponse(documents=tuple(summaries))
 
 
 @router.post("", response_model=IngestionResult)

@@ -23,6 +23,8 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("KENTRO_STATE_DIR", str(tmp_path / "kentro_state"))
     monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tmp_path / "tenants.json"))
+    # Auto-created tenants.json contains demo keys; opt in for test boot.
+    monkeypatch.setenv("KENTRO_ALLOW_DEMO_KEYS", "true")
     # Also set a dummy Anthropic key so make_llm_client() inside the lifespan succeeds.
     real = Settings()
     if not real.anthropic_api_key:
@@ -75,6 +77,29 @@ def test_static_ui_serves_named_files(isolated_state: None) -> None:
         # we got the JS content, not an HTML 404 page.
         if "React" not in r.text and "function" not in r.text:
             raise AssertionError("/app.jsx returned non-JS content")
+
+
+def test_demo_keys_refused_when_opt_in_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex 2026-05-03 critical: a fresh tenants.json contains demo keys; the lifespan
+    must refuse to boot unless KENTRO_ALLOW_DEMO_KEYS=true is set explicitly.
+
+    This is the inverted failure mode — old `kentro_prod_mode=False` accepted the
+    keys silently, leaking publicly-known bearer tokens on any non-loopback bind.
+    Now the safe default is "refuse"; opt-in is required for local dev.
+    """
+    monkeypatch.setenv("KENTRO_STATE_DIR", str(tmp_path / "kentro_state"))
+    monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tmp_path / "tenants.json"))
+    monkeypatch.delenv("KENTRO_ALLOW_DEMO_KEYS", raising=False)
+    if not Settings().anthropic_api_key:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used-here")
+    try:
+        with TestClient(app):
+            raise AssertionError("lifespan should have refused to boot with demo keys + no opt-in")
+    except RuntimeError as exc:
+        if "refusing to boot" not in str(exc) or "demo keys" not in str(exc):
+            raise AssertionError(f"unexpected RuntimeError: {exc}") from exc
 
 
 def test_mcp_mount_still_works_after_static(isolated_state: None) -> None:
