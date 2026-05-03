@@ -7,7 +7,8 @@
         {
           "id": "ingestion_agent",
           "display_name": "Ingestion Agent",
-          "api_key": "local-ingestion-do-not-share"
+          "api_key": "local-ingestion-do-not-share",
+          "is_admin": true
         },
         {
           "id": "sales",

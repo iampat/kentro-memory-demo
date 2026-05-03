@@ -10,6 +10,12 @@ import typer
 import uvicorn
 from fastapi import Depends, FastAPI, Request
 from kentro.schema import entity_type_def_from
+from kentro.types import (
+    EntityVisibilityRule,
+    FieldReadRule,
+    RuleSet,
+    WriteRule,
+)
 from rich.console import Console
 
 from kentro_server import __version__
@@ -365,13 +371,15 @@ def smoke_test(
     api_key: str = typer.Option(
         ...,
         envvar="KENTRO_API_KEY",
-        help="Bearer key for any agent that has read+write on the demo schema.",
+        help="Bearer key for an ADMIN agent (smoke-test applies a permissive ruleset).",
     ),
 ) -> None:
-    """End-to-end HTTP smoke: write a Customer, read it back, see the value.
+    """End-to-end HTTP smoke: register schema, grant ACL, write a Customer, read it back.
 
     Doesn't ingest a document or invoke the LLM — that's the long-running smoke.
-    This is the fast 'is the wiring alive' check: schema register → write → read.
+    This is the fast 'is the wiring alive' check: schema register → rules apply →
+    write → read. Requires an admin key because it calls /rules/apply and
+    /schema/register; both are admin-gated since PR #12.
     """
     headers = {"Authorization": f"Bearer {api_key}"}
     base = base_url.rstrip("/")
@@ -385,6 +393,42 @@ def smoke_test(
     )
     if r.status_code != 200:
         console.print(f"[red]/schema/register failed[/red] {r.status_code}: {r.text}")
+        raise typer.Exit(code=1)
+
+    # ACL is default-deny — apply a minimal permissive ruleset so the write/read
+    # below succeed. The agent_id we grant must match the agent the api_key
+    # resolves to; we don't know it directly, so we extract it from the response
+    # to a probe write (which will return PERMISSION_DENIED with a reason that
+    # mentions the agent). Simpler: ask /rules/active first, which echoes the
+    # tenant_id but not the agent_id — neither helps. Cleanest: call /llm/stats
+    # which is NOT auth-gated (just informational).
+    #
+    # Pragmatic v0: assume the admin key belongs to "ingestion_agent" (the
+    # default tenants.json ships that as the only admin). If a deployment has a
+    # different admin agent name, the user can edit this CLI or apply rules out
+    # of band.
+    agent_id = "ingestion_agent"
+    permissive = RuleSet(
+        rules=(
+            EntityVisibilityRule(agent_id=agent_id, entity_type="Customer", allowed=True),
+            WriteRule(agent_id=agent_id, entity_type="Customer", allowed=True),
+            FieldReadRule(
+                agent_id=agent_id, entity_type="Customer", field_name="name", allowed=True
+            ),
+        ),
+        version=0,
+    )
+    r = httpx.post(
+        f"{base}/rules/apply",
+        headers=headers,
+        json={
+            "ruleset": permissive.model_dump(mode="json"),
+            "summary": "smoke-test: minimal grant for Customer.name",
+        },
+        timeout=10.0,
+    )
+    if r.status_code != 200:
+        console.print(f"[red]/rules/apply failed[/red] {r.status_code}: {r.text}")
         raise typer.Exit(code=1)
 
     r = httpx.post(
@@ -406,7 +450,7 @@ def smoke_test(
     if name_field.get("status") != "known" or name_field.get("value") != "SmokeCo":
         console.print(f"[red]read-back mismatch[/red]: {name_field!r}")
         raise typer.Exit(code=1)
-    console.print("[green]smoke-test passed[/green]: schema → write → read round-trips.")
+    console.print("[green]smoke-test passed[/green]: schema → rules → write → read round-trips.")
 
 
 if __name__ == "__main__":

@@ -172,6 +172,28 @@ Phased delivery on the `step-7-http-api-mcp` branch (all phases in one PR):
 
 **109/109 unit tests pass; ruff lint + format + ty all clean.** Codex's three review findings (critical NL seam, high cache invalidation, medium NLResponse contract) all closed.
 
+**Post-merge fix-pass (PR #12, commit `63cb420`):** closed all 20 findings from the parallel Codex + independent reviews. 116/116 unit tests passing. Highlights: admin gate on `/rules/apply`, `/schema/register`, `DELETE /documents` (was the Critical auth bypass — any agent could re-grant); `EntityVisibilityRule` wired into `read_entity` (was dead code); `write_field` ruleset-version skew fixed (was lineage-vs-ACL race window); `object_json` double-encode fixed (now roundtrips non-string values cleanly); `NLIntentList.notes` field added so step-1 unclassifiable input is no longer silently dropped. Plus mid-function imports hoisted, `_LazyMcpMount` documented as a deliberate exception, `parse_nl_to_ruleset` rate-limit guard, test fakes deduplicated to `_helpers.py`, boot-time refusal-to-start in `KENTRO_PROD_MODE` if demo keys are present.
+
+### Post-merge validation (4 tiers + 3.5)
+
+The unit suite is hermetic — it never bound a port, never opened a real MCP session, never burned an LLM token. Real validation runs as four (and a half) tiers, scoped by cost:
+
+| Tier | What | Cost | Status |
+|---|---|---|---|
+| 1 | Boot uvicorn + `smoke-test` CLI + 7 curl admin-gate checks | free, ~30s | ✅ done |
+| 2 | `pytest tests/integration/end_to_end_smoke_test.py` — real Anthropic, real ingest, real conflict + resolver flow | ~$0.05–0.10 cold; cache covers re-runs | ✅ done (17s, cache hit) |
+| 3 | `kentro-server seed-demo` against the running server — 8 corpus markdown files via real `/documents` route | ~$0.50–2 cold; cache covers re-runs | ✅ done (8 docs, 26 entities total) |
+| 3.5 | Reboot the server on the same `kentro_state/` and verify entities + rules + tenants config persist | free, ~5s | ✅ done (rules version=2 + Acme entity present post-reboot) |
+| 4 | MCP client (e.g. `mcp inspector`) connects to `/mcp` with a valid + bad key, calls `kentro_remember`, reads via `kentro_read` | free, ~5min | **deferred** — needs user to install mcp inspector |
+
+Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` of `main`. All passed.
+
+**Tier 1 caught a real bug:** the `smoke-test` CLI command failed against default-deny ACL because it never set up its own grants. Fixed by having the command apply a minimal permissive ruleset using the admin key it's already given (admin role required since `/rules/apply` is admin-gated).
+
+**Tier 1 caught a second real bug:** the committed `tenants.json` predated the `is_admin` field — `ingestion_agent` was no longer admin after PR #12 merged. Fixed in the same fix-commit (the `DEFAULT_LOCAL_TENANT` in code already had it; the file lagged).
+
+Tier 4 is the only end-to-end path that exercises FastMCP's streamable HTTP transport with our `AuthMiddleware` + `_LazyMcpMount` composed end-to-end; the unit suite covers `AuthMiddleware` directly with synthetic ASGI scopes but not the full transport. Surface for the user when they're ready to install/run an MCP client.
+
 ---
 
 ## Step 8 — SDK clients
