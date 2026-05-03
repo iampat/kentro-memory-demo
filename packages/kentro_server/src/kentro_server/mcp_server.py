@@ -36,12 +36,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
-from kentro.types import AutoResolverSpec, EntityTypeDef, RuleSet
+from kentro.types import AutoResolverSpec, EntityTypeDef, RuleSet, WriteStatus
 from mcp.server.fastmcp import FastMCP
 from pydantic import TypeAdapter
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from kentro_server.api.auth import Principal
+from kentro_server.core.acl import evaluate_write
 from kentro_server.core.read import read_entity
 from kentro_server.core.rules import apply_ruleset, load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry
@@ -81,6 +82,19 @@ def _current_ctx() -> McpRequestContext:
             "behind it."
         )
     return ctx
+
+
+class McpAdminRequiredError(RuntimeError):
+    """Raised by an MCP tool when called by a non-admin agent. Surfaces to the
+    caller as an MCP tool error rather than an HTTP 403 (MCP transport doesn't
+    speak HTTP error codes for tool calls)."""
+
+
+def _require_admin(ctx: McpRequestContext) -> None:
+    if not ctx.principal.is_admin:
+        raise McpAdminRequiredError(
+            f"agent {ctx.principal.agent_id!r} is not admin; this tool requires the admin role"
+        )
 
 
 # === ASGI auth middleware ===========================================================
@@ -127,13 +141,15 @@ class AuthMiddleware:
         smart_model: str = state.settings.kentro_llm_smart_model
 
         try:
-            store, agent_id = registry.by_api_key(token)
+            store, agent_id, is_admin = registry.by_api_key(token)
         except KeyError:
             logger.info("mcp auth: unknown bearer key (length=%d)", len(token))
             await _send_unauthorized(send, b"invalid api key")
             return
 
-        principal = Principal(tenant_id=store.tenant_id, agent_id=agent_id, store=store)
+        principal = Principal(
+            tenant_id=store.tenant_id, agent_id=agent_id, store=store, is_admin=is_admin
+        )
         ctx = McpRequestContext(
             principal=principal,
             llm=llm,
@@ -191,10 +207,27 @@ def _register_tools(mcp: FastMCP) -> None:
         schema = SchemaRegistry(ctx.principal.store)
         if schema.get("Note") is None:
             schema.list_all()  # auto-seeds Note
+        # ACL once up-front; bail before any per-field writes if denied.
         ruleset = load_active_ruleset(ctx.principal.store)
+        acl = evaluate_write(
+            entity_type="Note",
+            field_name=None,
+            agent_id=ctx.principal.agent_id,
+            ruleset=ruleset,
+        )
+        if not acl.allowed:
+            return {
+                "status": WriteStatus.PERMISSION_DENIED.value,
+                "entity_type": "Note",
+                "entity_key": subject,
+                "reason": acl.reason,
+            }
         fields = {
             "predicate": json.dumps(predicate),
-            "object_json": json.dumps(json.dumps(object_value)),
+            # Single dumps: persists canonical JSON; one decode on read returns
+            # the original value. The previous double-dumps left object_json as
+            # an opaque string on read.
+            "object_json": json.dumps(object_value),
         }
         if source_label is not None:
             fields["source_label"] = json.dumps(source_label)
@@ -203,7 +236,6 @@ def _register_tools(mcp: FastMCP) -> None:
             last = write_field(
                 store=ctx.principal.store,
                 schema=schema,
-                ruleset_version=ruleset.version,
                 agent_id=ctx.principal.agent_id,
                 entity_type="Note",
                 entity_key=subject,
@@ -211,6 +243,8 @@ def _register_tools(mcp: FastMCP) -> None:
                 value_json=vjson,
                 confidence=confidence,
             )
+            if last.status == WriteStatus.PERMISSION_DENIED:
+                break
         return last.model_dump(mode="json") if last is not None else {}
 
     @mcp.tool(description="Read an entity by (type, key) using the default AutoResolver.")
@@ -240,11 +274,9 @@ def _register_tools(mcp: FastMCP) -> None:
     ) -> dict:
         ctx = _current_ctx()
         schema = SchemaRegistry(ctx.principal.store)
-        ruleset = load_active_ruleset(ctx.principal.store)
         result = write_field(
             store=ctx.principal.store,
             schema=schema,
-            ruleset_version=ruleset.version,
             agent_id=ctx.principal.agent_id,
             entity_type=entity_type,
             entity_key=entity_key,
@@ -271,18 +303,22 @@ def _register_tools(mcp: FastMCP) -> None:
         )
         return result.model_dump(mode="json")
 
-    @mcp.tool(description="Register one or more entity types (idempotent for unchanged defs).")
+    @mcp.tool(
+        description="ADMIN. Register one or more entity types (idempotent for unchanged defs)."
+    )
     def kentro_register_schema(type_defs_json: str) -> dict:
         ctx = _current_ctx()
+        _require_admin(ctx)
         adapter: TypeAdapter[list[EntityTypeDef]] = TypeAdapter(list[EntityTypeDef])
         type_defs = adapter.validate_json(type_defs_json)
         schema = SchemaRegistry(ctx.principal.store)
         schema.register_many(type_defs)
         return {"type_defs": [td.model_dump(mode="json") for td in schema.list_all()]}
 
-    @mcp.tool(description="Apply a RuleSet (atomic version bump). Body is a JSON RuleSet.")
+    @mcp.tool(description="ADMIN. Apply a RuleSet (atomic version bump). Body is a JSON RuleSet.")
     def kentro_apply_rules(ruleset_json: str, summary: str | None = None) -> dict:
         ctx = _current_ctx()
+        _require_admin(ctx)
         ruleset = RuleSet.model_validate_json(ruleset_json)
         new_version = apply_ruleset(
             ctx.principal.store,

@@ -26,11 +26,18 @@ _bearer = HTTPBearer(auto_error=False)
 
 @dataclass(frozen=True)
 class Principal:
-    """Resolved (tenant, agent) pair for the current request."""
+    """Resolved (tenant, agent) pair for the current request.
+
+    `is_admin` carries the control-plane role. Authentication (key valid?) and
+    authorization (role allowed?) are intentionally separate fields: `current_principal`
+    establishes identity, `current_admin_principal` enforces the role. This way a
+    route's signature documents which class of authority it requires.
+    """
 
     tenant_id: str
     agent_id: str
     store: TenantStore
+    is_admin: bool = False
 
 
 def _get_tenant_registry(request: Request) -> TenantRegistry:
@@ -58,7 +65,7 @@ def current_principal(
         )
     registry = _get_tenant_registry(request)
     try:
-        store, agent_id = registry.by_api_key(creds.credentials)
+        store, agent_id, is_admin = registry.by_api_key(creds.credentials)
     except KeyError:
         # Don't log the key itself — even partial fingerprints would help an
         # attacker confirm guesses.
@@ -68,10 +75,40 @@ def current_principal(
             detail="invalid api key",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
-    return Principal(tenant_id=store.tenant_id, agent_id=agent_id, store=store)
+    return Principal(tenant_id=store.tenant_id, agent_id=agent_id, store=store, is_admin=is_admin)
+
+
+def current_admin_principal(
+    principal: Annotated[Principal, Depends(current_principal)],
+) -> Principal:
+    """Authorize: caller must be an admin agent. 403 otherwise.
+
+    Used by control-plane routes (POST /rules/apply, POST /schema/register,
+    DELETE /documents/{id}). Without this gate, any tenant key could mutate the
+    ruleset and re-grant itself anything — defeating the per-(tenant, agent)
+    auth model.
+    """
+    if not principal.is_admin:
+        logger.info(
+            "auth: tenant=%s agent=%s attempted admin operation, denied",
+            principal.tenant_id,
+            principal.agent_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin role required for this operation",
+        )
+    return principal
 
 
 PrincipalDep = Annotated[Principal, Depends(current_principal)]
+AdminPrincipalDep = Annotated[Principal, Depends(current_admin_principal)]
 
 
-__all__ = ["Principal", "PrincipalDep", "current_principal"]
+__all__ = [
+    "AdminPrincipalDep",
+    "Principal",
+    "PrincipalDep",
+    "current_admin_principal",
+    "current_principal",
+]

@@ -1,6 +1,6 @@
 """Tests for `parse_nl_to_ruleset` — the NL → RuleSet orchestrator.
 
-Uses a fake LLMClient that returns canned `_NLIntentList` and `_ParsedRule`
+Uses a fake LLMClient that returns canned `NLIntentList` and `ParsedRule`
 results, so we can assert orchestration logic (per-intent validation,
 partial-success notes, schema/agent allowlist) without hitting a real LLM.
 """
@@ -17,9 +17,9 @@ from kentro.types import (
 )
 from kentro_server.skills.llm_client import (
     LLMClient,
-    _NLIntentItem,
-    _NLIntentList,
-    _ParsedRule,
+    NLIntentItem,
+    NLIntentList,
+    ParsedRule,
 )
 from kentro_server.skills.nl_to_ruleset import parse_nl_to_ruleset
 
@@ -38,8 +38,8 @@ def _customer_schema() -> EntityTypeDef:
 class _ScriptedLLM(LLMClient):
     """LLM that returns canned intents + per-intent parsed rules from queues."""
 
-    intent_list: _NLIntentList = field(default_factory=lambda: _NLIntentList(intents=()))
-    rule_queue: list[_ParsedRule] = field(default_factory=list)
+    intent_list: NLIntentList = field(default_factory=lambda: NLIntentList(intents=()))
+    rule_queue: list[ParsedRule] = field(default_factory=list)
 
     def run_skill_resolver(self, *, prompt, candidates, model=None):
         raise NotImplementedError("not exercised here")
@@ -69,7 +69,7 @@ class _ScriptedLLM(LLMClient):
 
 
 def test_empty_message_returns_empty_ruleset() -> None:
-    llm = _ScriptedLLM(intent_list=_NLIntentList(intents=()))
+    llm = _ScriptedLLM(intent_list=NLIntentList(intents=()))
     out = parse_nl_to_ruleset(
         llm=llm,
         text="hi there",
@@ -84,11 +84,11 @@ def test_empty_message_returns_empty_ruleset() -> None:
 
 def test_single_valid_field_read_intent_compiles() -> None:
     llm = _ScriptedLLM(
-        intent_list=_NLIntentList(
-            intents=(_NLIntentItem(kind="field_read", description="redact deal_size from sales"),)
+        intent_list=NLIntentList(
+            intents=(NLIntentItem(kind="field_read", description="redact deal_size from sales"),)
         ),
         rule_queue=[
-            _ParsedRule(
+            ParsedRule(
                 rule_json=FieldReadRule(
                     agent_id="sales",
                     entity_type="Customer",
@@ -115,14 +115,14 @@ def test_single_valid_field_read_intent_compiles() -> None:
 
 def test_partial_success_compiles_some_skips_others_with_notes() -> None:
     llm = _ScriptedLLM(
-        intent_list=_NLIntentList(
+        intent_list=NLIntentList(
             intents=(
-                _NLIntentItem(kind="field_read", description="redact A"),
-                _NLIntentItem(kind="field_read", description="redact B (LLM gives up)"),
+                NLIntentItem(kind="field_read", description="redact A"),
+                NLIntentItem(kind="field_read", description="redact B (LLM gives up)"),
             )
         ),
         rule_queue=[
-            _ParsedRule(
+            ParsedRule(
                 rule_json=FieldReadRule(
                     agent_id="sales",
                     entity_type="Customer",
@@ -131,7 +131,7 @@ def test_partial_success_compiles_some_skips_others_with_notes() -> None:
                 ).model_dump_json(),
                 reason="ok",
             ),
-            _ParsedRule(rule_json=None, reason="ambiguous — clarify which field"),
+            ParsedRule(rule_json=None, reason="ambiguous — clarify which field"),
         ],
     )
     out = parse_nl_to_ruleset(
@@ -151,11 +151,11 @@ def test_partial_success_compiles_some_skips_others_with_notes() -> None:
 def test_rule_referencing_unknown_field_is_rejected() -> None:
     """Validation guards against the LLM inventing field names."""
     llm = _ScriptedLLM(
-        intent_list=_NLIntentList(
-            intents=(_NLIntentItem(kind="field_read", description="redact foo"),)
+        intent_list=NLIntentList(
+            intents=(NLIntentItem(kind="field_read", description="redact foo"),)
         ),
         rule_queue=[
-            _ParsedRule(
+            ParsedRule(
                 rule_json=FieldReadRule(
                     agent_id="sales",
                     entity_type="Customer",
@@ -180,11 +180,11 @@ def test_rule_referencing_unknown_field_is_rejected() -> None:
 
 def test_rule_referencing_unknown_agent_is_rejected() -> None:
     llm = _ScriptedLLM(
-        intent_list=_NLIntentList(
-            intents=(_NLIntentItem(kind="write_permission", description="block ghost"),)
+        intent_list=NLIntentList(
+            intents=(NLIntentItem(kind="write_permission", description="block ghost"),)
         ),
         rule_queue=[
-            _ParsedRule(
+            ParsedRule(
                 rule_json=WriteRule(
                     agent_id="ghost",
                     entity_type="Customer",
@@ -209,16 +209,16 @@ def test_rule_referencing_unknown_agent_is_rejected() -> None:
 
 def test_conflict_resolver_intent_compiles() -> None:
     llm = _ScriptedLLM(
-        intent_list=_NLIntentList(
+        intent_list=NLIntentList(
             intents=(
-                _NLIntentItem(
+                NLIntentItem(
                     kind="conflict_resolver",
                     description="written outweighs verbal for deal_size",
                 ),
             )
         ),
         rule_queue=[
-            _ParsedRule(
+            ParsedRule(
                 rule_json=ConflictRule(
                     entity_type="Customer",
                     field_name="deal_size",

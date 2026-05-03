@@ -22,7 +22,7 @@ from kentro.types import (
 )
 from sqlmodel import col, select
 
-from kentro_server.core.acl import evaluate_field_read
+from kentro_server.core.acl import evaluate_entity_visibility, evaluate_field_read
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.skills.llm_client import LLMClient
@@ -64,6 +64,30 @@ def read_entity(
         # Entity type isn't registered. Return an empty record so the caller can
         # detect this; HTTP layer translates to 404 if appropriate.
         return EntityRecord(entity_type=entity_type, key=entity_key, fields={})
+
+    # Entity-visibility ACL gate: short-circuit before we even touch the DB.
+    # If the agent cannot see this entity, every declared field comes back
+    # HIDDEN with the visibility-denial reason. This is the same outcome shape
+    # as field-level deny — uniform from the SDK's perspective — but the
+    # enforcement happens once instead of per-field.
+    visibility = evaluate_entity_visibility(
+        entity_type=entity_type,
+        entity_key=entity_key,
+        agent_id=agent_id,
+        ruleset=ruleset,
+    )
+    if not visibility.allowed:
+        return EntityRecord(
+            entity_type=entity_type,
+            key=entity_key,
+            fields={
+                f.name: FieldValue(
+                    status=FieldStatus.HIDDEN,
+                    reason=visibility.reason or "entity hidden by visibility rule",
+                )
+                for f in type_def.fields
+            },
+        )
 
     with store.session() as session:
         entity_row = session.exec(
@@ -167,9 +191,16 @@ def _to_field_value(resolved) -> FieldValue:
 
 
 def _decode(value_json: str):
+    """Decode a stored JSON-encoded value. On parse failure, log and fall back
+    to the raw string — preserves observability over silently swallowing
+    corrupt-data bugs (per CLAUDE.md "log before fallback")."""
     try:
         return json.loads(value_json)
     except json.JSONDecodeError:
+        logger.warning(
+            "read._decode: stored value_json is not valid JSON, returning raw string: %r",
+            value_json[:200],
+        )
         return value_json
 
 

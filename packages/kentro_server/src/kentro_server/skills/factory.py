@@ -18,7 +18,9 @@ naturally and the inner SDK client is built once.
 import logging
 
 from kentro_server.settings import Settings
+from kentro_server.skills.anthropic_provider import AnthropicProvider
 from kentro_server.skills.cache import CacheStats, CachingProvider
+from kentro_server.skills.gemini_provider import GeminiProvider
 from kentro_server.skills.llm_client import (
     DefaultLLMClient,
     LLMClient,
@@ -86,22 +88,24 @@ def _build_cached_provider(*, provider_kind: str, settings: Settings) -> Caching
 
 
 def _build_provider(*, provider_kind: str, settings: Settings) -> Provider:
+    """Construct the concrete `Provider` for a tier.
+
+    Both `AnthropicProvider` and `GeminiProvider` are imported at module top
+    rather than lazily — `instructor` is loaded by the SDK regardless, so there
+    is no startup-time saving to gain by deferring. Per CLAUDE.md "no mid-code
+    imports", top-level wins.
+    """
     if provider_kind == "anthropic":
         if not settings.anthropic_api_key:
             raise LLMConfigError(
                 "kentro_llm_*_model resolves to Anthropic, but ANTHROPIC_API_KEY is not set"
             )
-        # Local import keeps the SDK pulled in only when it's actually selected.
-        from kentro_server.skills.anthropic_provider import AnthropicProvider
-
         return AnthropicProvider(api_key=settings.anthropic_api_key)
     if provider_kind == "google":
         if not settings.google_api_key:
             raise LLMConfigError(
                 "kentro_llm_*_model resolves to Google, but GOOGLE_API_KEY is not set"
             )
-        from kentro_server.skills.gemini_provider import GeminiProvider
-
         return GeminiProvider(api_key=settings.google_api_key)
     raise LLMConfigError(f"unknown provider {provider_kind!r}")
 

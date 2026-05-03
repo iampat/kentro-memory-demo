@@ -14,11 +14,14 @@ writes carry the rule version they were made under for lineage purposes.
 import logging
 
 from kentro.types import Rule, RuleSet
+from pydantic import TypeAdapter
 from sqlalchemy import func
 from sqlmodel import Session, select
 
 from kentro_server.store import TenantStore
 from kentro_server.store.models import RuleRow, RuleVersionRow
+
+_RULE_ADAPTER: TypeAdapter[Rule] = TypeAdapter(Rule)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +81,7 @@ def _next_version(session: Session) -> int:
 
 def _payload_to_rule(payload_json: str) -> Rule:
     """Parse a stored Rule JSON into the discriminated-union variant."""
-    from pydantic import TypeAdapter
-
-    return TypeAdapter(Rule).validate_json(payload_json)
+    return _RULE_ADAPTER.validate_json(payload_json)
 
 
 __all__ = ["apply_ruleset", "load_active_ruleset"]

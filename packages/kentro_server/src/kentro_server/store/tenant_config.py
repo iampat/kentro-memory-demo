@@ -15,13 +15,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AgentConfig(BaseModel):
-    """One agent identity within a tenant. `api_key` is the bearer token."""
+    """One agent identity within a tenant. `api_key` is the bearer token.
+
+    `is_admin=True` grants the control-plane role: only admin agents can change
+    rules (`POST /rules/apply`), evolve schemas (`POST /schema/register`), or
+    delete documents. The Sales-vs-CS demo boundary depends on this — without
+    it, any tenant key could re-grant itself anything.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
     display_name: str | None = None
+    is_admin: bool = False
 
 
 class TenantConfig(BaseModel):

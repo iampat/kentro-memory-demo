@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from kentro.types import IngestionResult
 
-from kentro_server.api.auth import PrincipalDep
+from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep
 from kentro_server.api.dtos import IngestRequest
 from kentro_server.core.rules import load_active_ruleset
@@ -41,8 +41,11 @@ def ingest(
 
 
 @router.delete("/{document_id}")
-def delete(document_id: UUID, principal: PrincipalDep) -> dict:
-    """Remove a document, its writes, its blob, and re-resolve any affected conflicts.
+def delete(document_id: UUID, principal: AdminPrincipalDep) -> dict:
+    """Remove a document, its writes, its blob, and re-resolve any affected conflicts. ADMIN only.
+
+    Source removal is irreversible (cascades to writes, conflict evidence, blob).
+    Gated to admin so a low-privilege agent can't wipe historical state.
 
     Returns the demo-shaped `{removed_writes, closed_conflicts}` summary so the
     caller (and the smoke test) can assert the cascade ran.

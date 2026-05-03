@@ -9,6 +9,7 @@ import httpx
 import typer
 import uvicorn
 from fastapi import Depends, FastAPI, Request
+from kentro.schema import entity_type_def_from
 from rich.console import Console
 
 from kentro_server import __version__
@@ -19,6 +20,7 @@ from kentro_server.api import (
     rules_router,
     schema_router,
 )
+from kentro_server.demo import Customer, Person
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import cache_metadata, cache_stats, make_llm_client
@@ -32,11 +34,26 @@ console = Console()
 class _LazyMcpMount:
     """Lazy mount for the MCP ASGI sub-app.
 
-    `FastMCP.session_manager` raises if `.run()` is entered twice, so we cannot
-    keep a single FastMCP instance across multiple lifespan cycles (which is the
-    normal pattern in tests that use `with TestClient(app)` repeatedly). Instead,
-    we mount this delegator at module load time and attach a freshly-built MCP
-    sub-app every time the lifespan starts.
+    Why this exists (and why it isn't a singleton in the harmful sense):
+
+    `FastMCP.session_manager.run()` can only be entered ONCE per FastMCP
+    instance (the SDK enforces this with a hard `RuntimeError` on a second
+    `.run()`). In production that's fine — the lifespan starts exactly once.
+    But the test suite uses `with TestClient(app):` per test, which enters the
+    lifespan once per `with` block. With a module-level FastMCP, the second
+    test would crash on the second `.run()`.
+
+    `_LazyMcpMount` solves this by mounting at module load time as a thin
+    delegator with no inner app. Each lifespan cycle constructs a *fresh*
+    FastMCP, wraps it in `AuthMiddleware`, and `attach`es it; on lifespan exit
+    we `detach`. The mount itself stays put on the FastAPI router.
+
+    This is a deliberate, narrow exception to CLAUDE.md "No singletons":
+    the FastAPI `app` itself is module-level (it has to be — uvicorn imports
+    it by path), and `_mcp_mount` is its peer. Per-lifespan attach/detach
+    keeps the actual MCP state owned by the lifespan, not the module. The
+    mental test from CLAUDE.md ("could I spin up two of these in one test?")
+    passes: each TestClient(app) gets its own attached MCP instance.
     """
 
     def __init__(self) -> None:
@@ -68,27 +85,77 @@ class _LazyMcpMount:
 _mcp_mount = _LazyMcpMount()
 
 
+_DEMO_KEY_PATTERNS = (
+    "local-ingestion-do-not-share",
+    "local-sales-do-not-share",
+    "local-cs-do-not-share",
+)
+
+
+def _warn_on_demo_keys_in_prod(registry: TenantRegistry, prod_mode: bool) -> None:
+    """If `KENTRO_PROD_MODE=true`, refuse to boot when any default-demo key is in tenants.json.
+
+    The committed tenants.json defaults are advertised "do-not-share" demo
+    placeholders. Catching them at boot in prod prevents the embarrassing case
+    where a deployment ships with the public README's keys still active.
+
+    In dev (default), we log a warning instead of refusing — the demo is the
+    expected path.
+    """
+    leaked: list[str] = []
+    for tcfg in registry.config.tenants:
+        for acfg in tcfg.agents:
+            if acfg.api_key in _DEMO_KEY_PATTERNS:
+                leaked.append(f"{tcfg.id}:{acfg.id}")
+    if not leaked:
+        return
+    msg = (
+        f"tenants.json contains default demo keys for: {', '.join(leaked)} — "
+        "these keys are documented publicly. ROTATE before exposing this server."
+    )
+    if prod_mode:
+        raise RuntimeError(f"refusing to boot in KENTRO_PROD_MODE: {msg}")
+    logger.warning("DEMO-KEY WARNING: %s", msg)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings()
-    app.state.settings = settings
-    app.state.llm_client = make_llm_client(settings)
-    app.state.tenant_registry = TenantRegistry.from_paths(
-        state_dir=settings.kentro_state_dir,
-        config_path=settings.kentro_tenants_json,
-    )
-    # Fresh FastMCP per lifespan cycle. AuthMiddleware reads request-time deps
-    # from `scope["app"].state`, so it doesn't need to capture the LLM/registry.
-    mcp = build_mcp()
-    _mcp_mount.attach(AuthMiddleware(mcp.streamable_http_app()))
-    # The MCP streamable HTTP transport requires its session manager running for
-    # the full lifetime of any HTTP requests it serves.
-    async with mcp.session_manager.run():
-        try:
-            yield
-        finally:
-            _mcp_mount.detach()
-            app.state.tenant_registry.dispose_all()
+    """App startup. Wires settings → LLM client → tenant registry → MCP mount.
+
+    Failure handling: any step may raise (bad model name, missing API key,
+    malformed tenants.json). The `finally` block uses `getattr(..., None)`
+    rather than direct attribute access so a partial setup doesn't mask the
+    real exception with a follow-on `AttributeError`. dispose_all() runs only
+    on objects that were actually constructed.
+    """
+    app.state.settings = None
+    app.state.llm_client = None
+    app.state.tenant_registry = None
+    mcp = None
+    try:
+        settings = Settings()
+        app.state.settings = settings
+        app.state.llm_client = make_llm_client(settings)
+        registry = TenantRegistry.from_paths(
+            state_dir=settings.kentro_state_dir,
+            config_path=settings.kentro_tenants_json,
+        )
+        app.state.tenant_registry = registry
+        _warn_on_demo_keys_in_prod(registry, prod_mode=settings.kentro_prod_mode)
+        # Fresh FastMCP per lifespan cycle (see _LazyMcpMount docstring).
+        mcp = build_mcp()
+        _mcp_mount.attach(AuthMiddleware(mcp.streamable_http_app()))
+        # The MCP streamable HTTP transport requires its session manager running
+        # for the full lifetime of any HTTP requests it serves.
+        async with mcp.session_manager.run():
+            try:
+                yield
+            finally:
+                _mcp_mount.detach()
+    finally:
+        registry = getattr(app.state, "tenant_registry", None)
+        if registry is not None:
+            registry.dispose_all()
 
 
 app = FastAPI(title="kentro-server", version=__version__, lifespan=lifespan)
@@ -219,10 +286,6 @@ def seed_demo(
     blob produces a new document row but the field writes are corroboration on
     top of the prior ones (no conflicts unless content differs).
     """
-    from kentro.schema import entity_type_def_from
-
-    from kentro_server.demo import Customer, Person
-
     # main.py is at packages/kentro_server/src/kentro_server/main.py — parents[4] is the repo root.
     repo_root = Path(__file__).resolve().parents[4]
     corpus_dir = repo_root / "examples" / "synthetic_corpus"
@@ -310,10 +373,6 @@ def smoke_test(
     Doesn't ingest a document or invoke the LLM — that's the long-running smoke.
     This is the fast 'is the wiring alive' check: schema register → write → read.
     """
-    from kentro.schema import entity_type_def_from
-
-    from kentro_server.demo import Customer
-
     headers = {"Authorization": f"Bearer {api_key}"}
     base = base_url.rstrip("/")
 

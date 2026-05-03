@@ -113,15 +113,20 @@ class ExtractionResult(BaseModel):
 # atomic intents (`identify_nl_intents`), then each intent is compiled separately
 # into a single Rule variant (`parse_nl_rule`). Both calls go through `instructor`,
 # which requires a Pydantic *model* as the response schema — `instructor` cannot
-# bind a bare list as the top-level type. Hence the `_NLIntentList` wrapper.
+# bind a bare list as the top-level type. Hence the `NLIntentList` wrapper.
 #
-# `_ParsedRule.rule_json` is the JSON-serialized Rule (discriminated-union variant),
+# `ParsedRule.rule_json` is the JSON-serialized Rule (discriminated-union variant),
 # or `None` if the LLM could not compile the intent into a valid rule. The
 # orchestrator validates the JSON against `kentro.types.Rule` and routes failures
 # into `NLResponse.notes` rather than discarding them.
+#
+# `NLIntentList.notes` carries any explanation the intent-splitter LLM emits for
+# input it could not classify into the four kinds — surfaced in the final
+# `NLResponse.notes` so the user sees *why* their phrasing was dropped, instead
+# of having it silently swallowed.
 
 
-class _NLIntentItem(BaseModel):
+class NLIntentItem(BaseModel):
     """One atomic intent, mirroring `kentro.types.NLIntent` on the wire side."""
 
     model_config = ConfigDict(frozen=True)
@@ -134,15 +139,24 @@ class _NLIntentItem(BaseModel):
     description: str = Field(description="The atomic intent in plain English.")
 
 
-class _NLIntentList(BaseModel):
-    """Wrapper model so `instructor` can return a list of intents."""
+class NLIntentList(BaseModel):
+    """Wrapper model so `instructor` can return a list of intents.
+
+    The `notes` field matches the `nl_intents/SKILL.md` contract — when the
+    splitter LLM cannot classify a piece of the user's message, it should emit
+    a brief explanation here. The orchestrator merges this into `NLResponse.notes`.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    intents: tuple[_NLIntentItem, ...] = ()
+    intents: tuple[NLIntentItem, ...] = ()
+    notes: str | None = Field(
+        default=None,
+        description="Explanation of input fragments the splitter could not classify.",
+    )
 
 
-class _ParsedRule(BaseModel):
+class ParsedRule(BaseModel):
     """Output of compiling a single NL intent into a Rule.
 
     `rule_json` is the JSON serialization of one `kentro.types.Rule` variant, or
@@ -191,7 +205,7 @@ class LLMClient(ABC):
         *,
         text: str,
         model: str | None = None,
-    ) -> _NLIntentList: ...
+    ) -> NLIntentList: ...
 
     @abstractmethod
     def parse_nl_rule(
@@ -202,7 +216,7 @@ class LLMClient(ABC):
         registered_schemas: "list",  # list[EntityTypeDef]
         known_agent_ids: tuple[str, ...],
         model: str | None = None,
-    ) -> _ParsedRule: ...
+    ) -> ParsedRule: ...
 
 
 class DefaultLLMClient(LLMClient):
@@ -261,12 +275,12 @@ class DefaultLLMClient(LLMClient):
         *,
         text: str,
         model: str | None = None,
-    ) -> _NLIntentList:
+    ) -> NLIntentList:
         return self.fast_provider.complete(
             model=model or self.fast_model,
             system=load_skill_markdown("nl_intents"),
             user=f"USER MESSAGE:\n{text}",
-            response_model=_NLIntentList,
+            response_model=NLIntentList,
         )
 
     def parse_nl_rule(
@@ -277,7 +291,7 @@ class DefaultLLMClient(LLMClient):
         registered_schemas: list,
         known_agent_ids: tuple[str, ...],
         model: str | None = None,
-    ) -> _ParsedRule:
+    ) -> ParsedRule:
         agents_block = ", ".join(known_agent_ids) if known_agent_ids else "(none)"
         user = (
             f"INTENT KIND: {intent_kind}\n"
@@ -289,7 +303,7 @@ class DefaultLLMClient(LLMClient):
             model=model or self.fast_model,
             system=load_skill_markdown("nl_to_rule"),
             user=user,
-            response_model=_ParsedRule,
+            response_model=ParsedRule,
         )
 
 
@@ -322,14 +336,14 @@ class OfflineLLMClient(LLMClient):
             "OfflineLLMClient.extract_entities called — extraction requires a real LLM backend"
         )
 
-    def identify_nl_intents(self, *, text, model=None) -> _NLIntentList:
+    def identify_nl_intents(self, *, text, model=None) -> NLIntentList:
         raise LLMOfflineError(
             "OfflineLLMClient.identify_nl_intents called — NL parsing requires a real LLM backend"
         )
 
     def parse_nl_rule(
         self, *, intent_description, intent_kind, registered_schemas, known_agent_ids, model=None
-    ) -> _ParsedRule:
+    ) -> ParsedRule:
         raise LLMOfflineError(
             "OfflineLLMClient.parse_nl_rule called — NL parsing requires a real LLM backend"
         )
@@ -393,7 +407,7 @@ __all__ = [
     "LLMOfflineError",
     "OfflineLLMClient",
     "SkillResolverDecision",
-    "_NLIntentItem",
-    "_NLIntentList",
-    "_ParsedRule",
+    "NLIntentItem",
+    "NLIntentList",
+    "ParsedRule",
 ]

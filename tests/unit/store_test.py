@@ -167,12 +167,17 @@ def test_unknown_tenant_id_raises(registry: TenantRegistry) -> None:
         registry.get("not-configured")
 
 
-def test_lookup_by_api_key_returns_tenant_and_agent(registry: TenantRegistry) -> None:
-    store, agent_id = registry.by_api_key("demo-1-key")
+def test_lookup_by_api_key_returns_tenant_agent_and_admin_flag(
+    registry: TenantRegistry,
+) -> None:
+    store, agent_id, is_admin = registry.by_api_key("demo-1-key")
     if store.tenant_id != "demo-1":
         raise AssertionError(f"api-key lookup wrong: got tenant {store.tenant_id}")
     if agent_id != "ingestion_agent":
         raise AssertionError(f"api-key lookup wrong: got agent {agent_id}")
+    # The default fixture's agent has is_admin=False (set explicitly in store_test.py).
+    if is_admin:
+        raise AssertionError("fixture agent should not be admin by default")
     with pytest.raises(KeyError, match="unknown api_key"):
         registry.by_api_key("not-a-real-key")
 

@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
-from kentro_server.api.auth import PrincipalDep
+from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import SchemaRegistryDep
 from kentro_server.api.dtos import SchemaListResponse, SchemaRegisterRequest
 from kentro_server.core.schema_registry import SchemaEvolutionError
@@ -23,9 +23,13 @@ router = APIRouter(prefix="/schema", tags=["schema"])
 def register_schema(
     body: SchemaRegisterRequest,
     schema: SchemaRegistryDep,
-    principal: PrincipalDep,
+    principal: AdminPrincipalDep,
 ) -> SchemaListResponse:
-    """Register one or more entity types. Idempotent for unchanged definitions.
+    """Register one or more entity types. Idempotent for unchanged definitions. ADMIN only.
+
+    Schema is part of the trust boundary — adding fields changes what an extractor
+    will populate, deprecating fields silences them on read. Same threat profile as
+    rule changes; same admin gate.
 
     Returns the post-registration list of all registered types (so callers can
     confirm the auto-seeded `Note` is present without a follow-up GET).

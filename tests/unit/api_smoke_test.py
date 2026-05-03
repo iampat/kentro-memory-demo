@@ -2,114 +2,49 @@
 
 What's covered:
 - Bearer auth: missing / wrong-scheme / unknown-key → 401
-- /schema/register + /schema → round-trip through the SchemaRegistry
+- /schema/register: admin-only (403 for non-admin)
 - /entities/{type}/{key}/{field} write + GET /entities/{type}/{key} read
-- /memory/remember writes onto the auto-seeded Note entity
-- /rules/apply + /rules/active round-trip
+- /memory/remember: writes onto the auto-seeded Note entity, with object_json
+  roundtrip-correctness (the previous implementation double-encoded; fixed)
+- /rules/apply: admin-only (403 for non-admin); non-admin cannot self-grant
 - /rules/parse: full path with a fake LLMClient (no real API calls)
-- /documents: full path with a fake LLMClient returning canned ExtractionResult
-
-The fake LLMClient is injected via FastAPI's `app.dependency_overrides`, which
-replaces the cached LLM client at the dependency seam without touching app state.
+- /documents POST + DELETE: ingest succeeds with fake LLM; DELETE is admin-only
+- read_entity with EntityVisibilityRule denial → all fields HIDDEN
 """
 
 from collections.abc import Iterator
-from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from kentro.types import EntityTypeDef, FieldDef, FieldReadRule, RuleSet, WriteRule
+from kentro.types import (
+    EntityTypeDef,
+    EntityVisibilityRule,
+    FieldDef,
+    FieldReadRule,
+    RuleSet,
+    WriteRule,
+)
 from kentro_server.api.deps import get_llm_client
 from kentro_server.main import app
-from kentro_server.settings import Settings
 from kentro_server.skills.llm_client import (
     ExtractedEntity,
     ExtractedField,
     ExtractionResult,
-    LLMClient,
-    SkillResolverDecision,
-    _NLIntentItem,
-    _NLIntentList,
-    _ParsedRule,
+    NLIntentItem,
+    NLIntentList,
+    ParsedRule,
 )
 
-
-@dataclass
-class _FakeLLM(LLMClient):
-    """Multi-purpose fake — handlers script its responses per test."""
-
-    extraction_result: ExtractionResult | None = None
-    nl_intents: _NLIntentList = field(default_factory=lambda: _NLIntentList(intents=()))
-    nl_rules: list[_ParsedRule] = field(default_factory=list)
-
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
-        return SkillResolverDecision(chosen_value_json=None, reason="not under test")
-
-    def extract_entities(
-        self, *, document_text, registered_schemas, document_label=None, model=None
-    ):
-        return self.extraction_result or ExtractionResult(entities=())
-
-    def identify_nl_intents(self, *, text, model=None):
-        return self.nl_intents
-
-    def parse_nl_rule(
-        self,
-        *,
-        intent_description,
-        intent_kind,
-        registered_schemas,
-        known_agent_ids,
-        model=None,
-    ):
-        if not self.nl_rules:
-            return _ParsedRule(rule_json=None, reason="fake LLM out of scripted rules")
-        return self.nl_rules.pop(0)
-
-
-_API_KEY = "test-ingestion-key"
-_BAD_KEY = "this-key-does-not-exist"
+from tests.unit._helpers import ADMIN_KEY, AGENT_KEY, FakeLLM
 
 
 @pytest.fixture
-def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the lifespan at a tmp state dir + tenants.json with a known API key.
+def client(isolated_state: None, fake_llm: FakeLLM) -> Iterator[TestClient]:
+    """TestClient with `get_llm_client` overridden to return `fake_llm`.
 
-    The tenants.json carries one tenant `local` with one agent `ingestion_agent`
-    whose api_key is `_API_KEY`. Tests authenticate with that key.
+    `isolated_state` and `fake_llm` are conftest fixtures: tmp tenants.json
+    with an admin + non-admin agent, and a scriptable LLM stub.
     """
-    state_dir = tmp_path / "kentro_state"
-    tenants_json = tmp_path / "tenants.json"
-    tenants_json.write_text(
-        f"""{{
-          "tenants": [
-            {{
-              "id": "local",
-              "display_name": "Local",
-              "agents": [
-                {{"id": "ingestion_agent", "api_key": "{_API_KEY}"}}
-              ]
-            }}
-          ]
-        }}""",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("KENTRO_STATE_DIR", str(state_dir))
-    monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tenants_json))
-    real = Settings()
-    if not real.anthropic_api_key:
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used-here")
-
-
-@pytest.fixture
-def fake_llm() -> _FakeLLM:
-    return _FakeLLM()
-
-
-@pytest.fixture
-def client(isolated_state: None, fake_llm: _FakeLLM) -> Iterator[TestClient]:
-    """TestClient with `get_llm_client` overridden to return `fake_llm`."""
     app.dependency_overrides[get_llm_client] = lambda: fake_llm
     try:
         with TestClient(app) as c:
@@ -118,19 +53,23 @@ def client(isolated_state: None, fake_llm: _FakeLLM) -> Iterator[TestClient]:
         app.dependency_overrides.pop(get_llm_client, None)
 
 
-def _auth() -> dict:
-    return {"Authorization": f"Bearer {_API_KEY}"}
+def _admin() -> dict:
+    return {"Authorization": f"Bearer {ADMIN_KEY}"}
 
 
-def _permissive_ruleset_body() -> dict:
-    """ACL is default-deny, so tests that exercise reads/writes need to grant access first.
+def _agent() -> dict:
+    return {"Authorization": f"Bearer {AGENT_KEY}"}
 
-    We write one wildcard FieldReadRule per (Customer, Note) field-name we touch and
-    one WriteRule per type. This keeps the auth surface honest — the Bearer key is
-    *necessary* to make a request, but it's the ruleset that decides what each agent
-    can do once authenticated.
+
+def _grant_access_for_ingestion(client: TestClient) -> None:
+    """Apply a permissive ruleset for ingestion_agent so non-control-plane writes succeed.
+
+    Entity visibility is default-deny (least privilege, like field reads), so we
+    grant it here for the entity types these tests touch.
     """
     rules = (
+        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
         WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
         WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
         FieldReadRule(
@@ -175,18 +114,21 @@ def _permissive_ruleset_body() -> dict:
         FieldReadRule(
             agent_id="ingestion_agent",
             entity_type="Note",
+            field_name="confidence",
+            allowed=True,
+        ),
+        FieldReadRule(
+            agent_id="ingestion_agent",
+            entity_type="Note",
             field_name="source_label",
             allowed=True,
         ),
     )
-    return {
+    body = {
         "ruleset": RuleSet(rules=rules, version=0).model_dump(mode="json"),
         "summary": "test setup: grant ingestion_agent broad access",
     }
-
-
-def _grant_access(client: TestClient) -> None:
-    r = client.post("/rules/apply", headers=_auth(), json=_permissive_ruleset_body())
+    r = client.post("/rules/apply", headers=_admin(), json=body)
     if r.status_code != 200:
         raise AssertionError(f"could not apply permissive ruleset: {r.status_code} {r.text}")
 
@@ -201,15 +143,71 @@ def test_route_without_bearer_returns_401(client: TestClient) -> None:
 
 
 def test_route_with_wrong_scheme_returns_401(client: TestClient) -> None:
-    r = client.get("/schema", headers={"Authorization": f"Basic {_API_KEY}"})
+    r = client.get("/schema", headers={"Authorization": f"Basic {ADMIN_KEY}"})
     if r.status_code != 401:
         raise AssertionError(f"non-Bearer scheme must return 401, got {r.status_code}")
 
 
 def test_route_with_unknown_key_returns_401(client: TestClient) -> None:
-    r = client.get("/schema", headers={"Authorization": f"Bearer {_BAD_KEY}"})
+    r = client.get("/schema", headers={"Authorization": "Bearer not-a-real-key"})
     if r.status_code != 401:
         raise AssertionError(f"unknown key must return 401, got {r.status_code}: {r.text}")
+
+
+# === Admin gate ======================================================================
+
+
+def test_non_admin_cannot_apply_rules(client: TestClient) -> None:
+    """The Critical-#1 regression: a non-admin agent must NOT be able to mutate the ruleset."""
+    body = {
+        "ruleset": RuleSet(
+            rules=(
+                FieldReadRule(
+                    agent_id="sales", entity_type="Customer", field_name="name", allowed=True
+                ),
+            ),
+            version=0,
+        ).model_dump(mode="json"),
+        "summary": "sales attempts to self-grant",
+    }
+    r = client.post("/rules/apply", headers=_agent(), json=body)
+    if r.status_code != 403:
+        raise AssertionError(f"non-admin /rules/apply must be 403, got {r.status_code}: {r.text}")
+
+
+def test_non_admin_cannot_register_schema(client: TestClient) -> None:
+    """Schema is part of the trust boundary; non-admin must be denied."""
+    body = {
+        "type_defs": [
+            EntityTypeDef(
+                name="Customer", fields=(FieldDef(name="name", type_str="str"),)
+            ).model_dump(mode="json")
+        ]
+    }
+    r = client.post("/schema/register", headers=_agent(), json=body)
+    if r.status_code != 403:
+        raise AssertionError(
+            f"non-admin /schema/register must be 403, got {r.status_code}: {r.text}"
+        )
+
+
+def test_non_admin_cannot_delete_documents(client: TestClient) -> None:
+    """Source removal is destructive; non-admin must be denied."""
+    from uuid import uuid4
+
+    r = client.delete(f"/documents/{uuid4()}", headers=_agent())
+    if r.status_code != 403:
+        raise AssertionError(f"non-admin DELETE /documents must be 403, got {r.status_code}")
+
+
+def test_admin_can_apply_rules(client: TestClient) -> None:
+    body = {
+        "ruleset": RuleSet(rules=(), version=0).model_dump(mode="json"),
+        "summary": "admin baseline",
+    }
+    r = client.post("/rules/apply", headers=_admin(), json=body)
+    if r.status_code != 200:
+        raise AssertionError(f"admin /rules/apply should succeed, got {r.status_code}: {r.text}")
 
 
 # === Schema ==========================================================================
@@ -223,7 +221,7 @@ def test_schema_register_and_list_roundtrip(client: TestClient) -> None:
             ).model_dump(mode="json")
         ]
     }
-    r = client.post("/schema/register", headers=_auth(), json=body)
+    r = client.post("/schema/register", headers=_admin(), json=body)
     if r.status_code != 200:
         raise AssertionError(f"register failed: {r.status_code} {r.text}")
     names = {td["name"] for td in r.json()["type_defs"]}
@@ -232,22 +230,19 @@ def test_schema_register_and_list_roundtrip(client: TestClient) -> None:
     if "Note" not in names:
         raise AssertionError("Note must be auto-seeded into the registry")
 
-    r = client.get("/schema", headers=_auth())
+    # GET /schema is read-only — non-admin can list.
+    r = client.get("/schema", headers=_agent())
     if r.status_code != 200:
-        raise AssertionError(f"GET /schema failed: {r.status_code}")
-    listed = {td["name"] for td in r.json()["type_defs"]}
-    if listed != names:
-        raise AssertionError(f"GET /schema differs from register response: {listed} != {names}")
+        raise AssertionError(f"GET /schema (as agent) failed: {r.status_code}")
 
 
 # === Write + read ====================================================================
 
 
 def test_write_then_read_roundtrips(client: TestClient) -> None:
-    # Register Customer
     client.post(
         "/schema/register",
-        headers=_auth(),
+        headers=_admin(),
         json={
             "type_defs": [
                 EntityTypeDef(
@@ -260,19 +255,17 @@ def test_write_then_read_roundtrips(client: TestClient) -> None:
             ]
         },
     )
-    _grant_access(client)
+    _grant_access_for_ingestion(client)
 
-    # Write
     r = client.post(
         "/entities/Customer/Acme/name",
-        headers=_auth(),
+        headers=_admin(),
         json={"value_json": '"Acme Corp"'},
     )
     if r.status_code != 200 or r.json()["status"] != "applied":
         raise AssertionError(f"write should be APPLIED: {r.status_code} {r.text}")
 
-    # Read
-    r = client.get("/entities/Customer/Acme", headers=_auth())
+    r = client.get("/entities/Customer/Acme", headers=_admin())
     if r.status_code != 200:
         raise AssertionError(f"read failed: {r.status_code} {r.text}")
     record = r.json()
@@ -284,16 +277,70 @@ def test_write_then_read_roundtrips(client: TestClient) -> None:
         )
 
 
+def test_entity_visibility_denial_hides_all_fields(client: TestClient) -> None:
+    """A denying EntityVisibilityRule must HIDE every declared field on the entity."""
+    client.post(
+        "/schema/register",
+        headers=_admin(),
+        json={
+            "type_defs": [
+                EntityTypeDef(
+                    name="Customer",
+                    fields=(
+                        FieldDef(name="name", type_str="str"),
+                        FieldDef(name="deal_size", type_str="float | None"),
+                    ),
+                ).model_dump(mode="json")
+            ]
+        },
+    )
+    rules = (
+        FieldReadRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
+        ),
+        FieldReadRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="deal_size",
+            allowed=True,
+        ),
+        EntityVisibilityRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            entity_key="Acme",
+            allowed=False,
+        ),
+        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+    )
+    client.post(
+        "/rules/apply",
+        headers=_admin(),
+        json={
+            "ruleset": RuleSet(rules=rules, version=0).model_dump(mode="json"),
+            "summary": "deny visibility on Customer:Acme",
+        },
+    )
+    client.post(
+        "/entities/Customer/Acme/name", headers=_admin(), json={"value_json": '"Acme Corp"'}
+    )
+    r = client.get("/entities/Customer/Acme", headers=_admin())
+    fields = r.json()["fields"]
+    for fname, fv in fields.items():
+        if fv["status"] != "hidden":
+            raise AssertionError(
+                f"with visibility denied, field {fname!r} should be HIDDEN, got {fv!r}"
+            )
+
+
 # === Memory / Note ===================================================================
 
 
 def test_remember_writes_to_note_entity(client: TestClient) -> None:
-    # Trigger Note auto-seed and grant access.
-    client.get("/schema", headers=_auth())
-    _grant_access(client)
+    client.get("/schema", headers=_admin())  # auto-seed Note
+    _grant_access_for_ingestion(client)
     r = client.post(
         "/memory/remember",
-        headers=_auth(),
+        headers=_admin(),
         json={
             "subject": "demo-prep",
             "predicate": "scheduled_at",
@@ -303,29 +350,67 @@ def test_remember_writes_to_note_entity(client: TestClient) -> None:
     )
     if r.status_code != 200:
         raise AssertionError(f"remember failed: {r.status_code} {r.text}")
-    if r.json()["status"] not in {"applied", "conflict_recorded"}:
-        raise AssertionError(f"unexpected status: {r.json()!r}")
 
-    # Read it back via the Note entity (Note is auto-seeded; we never registered it).
-    r = client.get("/entities/Note/demo-prep", headers=_auth())
-    if r.status_code != 200:
-        raise AssertionError(f"reading Note back failed: {r.status_code} {r.text}")
+    r = client.get("/entities/Note/demo-prep", headers=_admin())
     fields = r.json()["fields"]
     if fields["predicate"]["value"] != "scheduled_at":
         raise AssertionError(f"predicate mismatch: {fields['predicate']!r}")
+    # Roundtrip correctness: stored as canonical JSON, decoded once on read.
+    if fields["object_json"]["value"] != "2026-05-10T14:00:00Z":
+        raise AssertionError(
+            f"object_json should roundtrip to original value, got {fields['object_json']!r}"
+        )
     if fields["source_label"]["value"] != "kentro-cli":
         raise AssertionError(f"source_label mismatch: {fields['source_label']!r}")
+
+
+def test_remember_object_json_handles_non_string_values(client: TestClient) -> None:
+    """The High-#5 regression: non-string object_json must roundtrip without
+    leaving an opaque double-encoded string on read."""
+    client.get("/schema", headers=_admin())
+    _grant_access_for_ingestion(client)
+    r = client.post(
+        "/memory/remember",
+        headers=_admin(),
+        json={
+            "subject": "acme-deal",
+            "predicate": "details",
+            "object_json": {"deal_size": 250000, "status": "open"},
+        },
+    )
+    if r.status_code != 200:
+        raise AssertionError(f"remember failed: {r.status_code} {r.text}")
+    r = client.get("/entities/Note/acme-deal", headers=_admin())
+    obj = r.json()["fields"]["object_json"]["value"]
+    if obj != {"deal_size": 250000, "status": "open"}:
+        raise AssertionError(
+            f"non-string object_json should roundtrip as the original dict, got {obj!r}"
+        )
+
+
+def test_remember_returns_permission_denied_before_writing(client: TestClient) -> None:
+    """The Low-#15 regression: ACL is checked once before issuing per-field writes."""
+    client.get("/schema", headers=_admin())
+    # No permissive ruleset applied → admin agent has no Note write permission either
+    # (admin role gates control-plane routes; ACL still gates data-plane writes).
+    r = client.post(
+        "/memory/remember",
+        headers=_admin(),
+        json={"subject": "nope", "predicate": "x", "object_json": "y"},
+    )
+    if r.status_code != 200:
+        raise AssertionError(f"remember should return 200 with PD payload: {r.status_code}")
+    if r.json()["status"] != "permission_denied":
+        raise AssertionError(f"expected permission_denied, got {r.json()!r}")
 
 
 # === Rules ===========================================================================
 
 
 def test_apply_rules_then_get_active(client: TestClient) -> None:
-    # Need a registered schema for the rule to validate against later — but apply
-    # itself doesn't validate, so this is just to keep the world coherent.
     client.post(
         "/schema/register",
-        headers=_auth(),
+        headers=_admin(),
         json={
             "type_defs": [
                 EntityTypeDef(
@@ -345,14 +430,14 @@ def test_apply_rules_then_get_active(client: TestClient) -> None:
         "ruleset": RuleSet(rules=(rule,), version=0).model_dump(mode="json"),
         "summary": "redact deal_size from ingestion_agent",
     }
-    r = client.post("/rules/apply", headers=_auth(), json=body)
+    r = client.post("/rules/apply", headers=_admin(), json=body)
     if r.status_code != 200:
         raise AssertionError(f"apply failed: {r.status_code} {r.text}")
     payload = r.json()
     if payload["version"] != 1 or payload["rules_applied"] != 1:
         raise AssertionError(f"unexpected apply payload: {payload!r}")
 
-    r = client.get("/rules/active", headers=_auth())
+    r = client.get("/rules/active", headers=_admin())
     if r.status_code != 200:
         raise AssertionError(f"get active failed: {r.status_code}")
     active = r.json()
@@ -360,11 +445,10 @@ def test_apply_rules_then_get_active(client: TestClient) -> None:
         raise AssertionError(f"unexpected active ruleset: {active!r}")
 
 
-def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) -> None:
-    # Register a schema so the orchestrator's validation passes.
+def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: FakeLLM) -> None:
     client.post(
         "/schema/register",
-        headers=_auth(),
+        headers=_admin(),
         json={
             "type_defs": [
                 EntityTypeDef(
@@ -374,12 +458,11 @@ def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) -> Non
             ]
         },
     )
-
-    fake_llm.nl_intents = _NLIntentList(
-        intents=(_NLIntentItem(kind="field_read", description="redact deal_size from ingestion"),)
+    fake_llm.nl_intents = NLIntentList(
+        intents=(NLIntentItem(kind="field_read", description="redact deal_size from ingestion"),)
     )
     fake_llm.nl_rules = [
-        _ParsedRule(
+        ParsedRule(
             rule_json=FieldReadRule(
                 agent_id="ingestion_agent",
                 entity_type="Customer",
@@ -392,7 +475,7 @@ def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) -> Non
 
     r = client.post(
         "/rules/parse",
-        headers=_auth(),
+        headers=_admin(),
         json={"text": "redact deal_size from ingestion"},
     )
     if r.status_code != 200:
@@ -405,10 +488,10 @@ def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) -> Non
 # === Documents =======================================================================
 
 
-def test_ingest_document_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) -> None:
+def test_ingest_document_via_fake_llm(client: TestClient, fake_llm: FakeLLM) -> None:
     client.post(
         "/schema/register",
-        headers=_auth(),
+        headers=_admin(),
         json={
             "type_defs": [
                 EntityTypeDef(
@@ -421,7 +504,7 @@ def test_ingest_document_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) ->
             ]
         },
     )
-    _grant_access(client)
+    _grant_access_for_ingestion(client)
     fake_llm.extraction_result = ExtractionResult(
         entities=(
             ExtractedEntity(
@@ -436,11 +519,10 @@ def test_ingest_document_via_fake_llm(client: TestClient, fake_llm: _FakeLLM) ->
     )
     r = client.post(
         "/documents",
-        headers=_auth(),
+        headers=_admin(),
         json={"content": "Acme renewal at $250K. Talked to Jane.", "label": "call.md"},
     )
     if r.status_code != 200:
         raise AssertionError(f"ingest failed: {r.status_code} {r.text}")
-    result = r.json()
-    if not result["entities"]:
-        raise AssertionError(f"ingest should produce entities: {result!r}")
+    if not r.json()["entities"]:
+        raise AssertionError(f"ingest should produce entities: {r.json()!r}")

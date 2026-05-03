@@ -11,7 +11,7 @@ import logging
 from fastapi import APIRouter
 from kentro.types import NLResponse, RuleSet
 
-from kentro_server.api.auth import PrincipalDep
+from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, TenantRegistryDep
 from kentro_server.api.dtos import (
     ApplyRulesetRequest,
@@ -45,8 +45,12 @@ def parse_rules(
 
 
 @router.post("/apply", response_model=ApplyRulesetResponse)
-def apply_rules(body: ApplyRulesetRequest, principal: PrincipalDep) -> ApplyRulesetResponse:
-    """Atomically commit a RuleSet as a new version. Returns the new version number."""
+def apply_rules(body: ApplyRulesetRequest, principal: AdminPrincipalDep) -> ApplyRulesetResponse:
+    """Atomically commit a RuleSet as a new version. ADMIN only.
+
+    Without the admin gate, any agent could re-grant itself anything — see the
+    auth model docstring on `Principal`.
+    """
     new_version = apply_ruleset(
         principal.store,
         rules=body.ruleset.rules,

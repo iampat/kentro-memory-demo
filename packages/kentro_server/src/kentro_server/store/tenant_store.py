@@ -37,7 +37,14 @@ DEFAULT_LOCAL_TENANT = TenantConfig(
     id="local",
     display_name="Local Dev",
     agents=(
-        AgentConfig(id="ingestion_agent", api_key="local-ingestion-do-not-share"),
+        # ingestion_agent is admin so the demo's seed flow can register schemas
+        # and apply rules. sales / customer_service are non-admin so the
+        # Sales-vs-CS access boundary is real (they cannot re-grant themselves).
+        AgentConfig(
+            id="ingestion_agent",
+            api_key="local-ingestion-do-not-share",
+            is_admin=True,
+        ),
         AgentConfig(id="sales", api_key="local-sales-do-not-share"),
         AgentConfig(id="customer_service", api_key="local-cs-do-not-share"),
     ),
@@ -102,11 +109,14 @@ class TenantRegistry:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self._stores: dict[str, TenantStore] = {}
         self._key_to_pair: dict[str, tuple[str, str]] = {}
+        self._admin_keys: set[str] = set()
         for tcfg in config.tenants:
             # Construct eagerly so misconfigured IDs fail fast, not on first request.
             self._stores[tcfg.id] = TenantStore(root_dir, tcfg.id)
             for acfg in tcfg.agents:
                 self._key_to_pair[acfg.api_key] = (tcfg.id, acfg.id)
+                if acfg.is_admin:
+                    self._admin_keys.add(acfg.api_key)
 
     @classmethod
     def from_paths(cls, *, state_dir: Path, config_path: Path) -> "TenantRegistry":
@@ -136,13 +146,13 @@ class TenantRegistry:
             raise KeyError(f"unknown tenant_id {tenant_id!r}; configured: {sorted(self._stores)}")
         return store
 
-    def by_api_key(self, api_key: str) -> tuple[TenantStore, str]:
-        """Resolve the bearer key to (store, agent_id). Raises KeyError on miss."""
+    def by_api_key(self, api_key: str) -> tuple[TenantStore, str, bool]:
+        """Resolve the bearer key to (store, agent_id, is_admin). Raises KeyError on miss."""
         pair = self._key_to_pair.get(api_key)
         if pair is None:
             raise KeyError("unknown api_key")
         tenant_id, agent_id = pair
-        return self.get(tenant_id), agent_id
+        return self.get(tenant_id), agent_id, api_key in self._admin_keys
 
     def agents_for(self, tenant_id: str) -> tuple[AgentConfig, ...]:
         for t in self.config.tenants:

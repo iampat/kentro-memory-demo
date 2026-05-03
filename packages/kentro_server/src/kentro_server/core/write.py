@@ -4,14 +4,23 @@ Per the handoff §1.5: write checks ACL first; if a conflict exists with existin
 writes, both are stored (per `core/conflict.record_field_write`); the typed
 `WriteResult` carries the outcome (no exceptions for permission-denied or
 conflict-recorded — those are domain outcomes the SDK enum represents).
+
+Versioning: `write_field` loads the active ruleset *once* and uses the same
+version for both the ACL check and the lineage stamp (`rule_version_at_write`).
+The previous implementation took a caller-supplied `ruleset_version` AND
+re-loaded internally, which left a window where the ACL check ran under v(N+1)
+while lineage stamped v(N). One source of truth, no skew.
 """
 
 import logging
 
 from kentro.types import WriteResult, WriteStatus
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
 
 from kentro_server.core.acl import evaluate_write
 from kentro_server.core.conflict import record_field_write
+from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.store import TenantStore
 from kentro_server.store.models import EntityRow
@@ -23,7 +32,6 @@ def write_field(
     store: TenantStore,
     *,
     schema: SchemaRegistry,
-    ruleset_version: int,
     agent_id: str,
     entity_type: str,
     entity_key: str,
@@ -33,13 +41,15 @@ def write_field(
 ) -> WriteResult:
     """Write `value_json` to `(entity_type, entity_key).field_name` as `agent_id`.
 
+    Loads the active ruleset internally — the ACL check and the lineage stamp
+    both reference the same version, no caller-supplied `ruleset_version` to
+    drift out of sync.
+
     Returns a `WriteResult` with status enum:
       - APPLIED: write recorded, no conflict
       - CONFLICT_RECORDED: write recorded; a conflict now exists for this field
       - PERMISSION_DENIED: ACL denied; no write
     """
-    from kentro_server.core.rules import load_active_ruleset
-
     type_def = schema.get(entity_type)
     if type_def is None:
         return WriteResult(
@@ -84,7 +94,7 @@ def write_field(
             value_json=value_json,
             confidence=confidence,
             written_by_agent_id=agent_id,
-            rule_version_at_write=ruleset_version,
+            rule_version_at_write=ruleset.version,
         )
         session.commit()
         conflict_id = conflict_row.id if conflict_row is not None else None
@@ -114,9 +124,6 @@ def _field_writable(type_def, field_name: str) -> bool:
 
 def _get_or_create_entity(session, *, entity_type: str, key: str):
     """Same race-safe get-or-create as the ingestor uses, inlined for the write path."""
-    from sqlalchemy.exc import IntegrityError
-    from sqlmodel import select
-
     existing = session.exec(
         select(EntityRow).where(
             EntityRow.type == entity_type,

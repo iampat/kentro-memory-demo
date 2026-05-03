@@ -79,12 +79,14 @@ def write(
     principal: PrincipalDep,
     schema: SchemaRegistryDep,
 ) -> WriteResult:
-    """Write one field. Returns a typed WriteResult (APPLIED / CONFLICT_RECORDED / DENIED)."""
-    ruleset = load_active_ruleset(principal.store)
+    """Write one field. Returns a typed WriteResult (APPLIED / CONFLICT_RECORDED / DENIED).
+
+    `write_field` loads the active ruleset internally, so the ACL check and the
+    lineage stamp share the same version (no skew window).
+    """
     return write_field(
         store=principal.store,
         schema=schema,
-        ruleset_version=ruleset.version,
         agent_id=principal.agent_id,
         entity_type=entity_type,
         entity_key=entity_key,

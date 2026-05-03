@@ -45,6 +45,11 @@ NOTE_TYPE_DEF = EntityTypeDef(
             default_json="null",
         ),
         FieldDef(
+            # TODO(v0.1): `type_str="str"` is a v0 documentation lie — `RememberRequest.object_json`
+            # is typed `Any` and the route json.dumps's it before storing. Reads decode once and
+            # return the original Python value. Real fix: introduce a `value_type=any|json`
+            # discriminator on FieldDef and let the extractor / writer respect it. For now, the
+            # type_str is descriptive only — the server doesn't validate stored values against it.
             name="object_json",
             type_str="str",
             default_json='""',
