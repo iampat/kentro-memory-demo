@@ -1,23 +1,58 @@
 """kentro-server CLI + FastAPI app entrypoint."""
 
 import logging
+from contextlib import asynccontextmanager
+from typing import Annotated
 
 import httpx
 import typer
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Request
 from rich.console import Console
 
 from kentro_server import __version__
-from kentro_server.settings import get_settings
+from kentro_server.settings import Settings
 from kentro_server.skills.cache import CachingLLMClient
-from kentro_server.skills.factory import get_llm_client
-from kentro_server.skills.llm_client import LLMConfigError
+from kentro_server.skills.factory import make_llm_client
+from kentro_server.skills.llm_client import LLMClient
+from kentro_server.store import StoreRegistry
 
 logger = logging.getLogger(__name__)
 console = Console()
 
-app = FastAPI(title="kentro-server", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = Settings()
+    app.state.settings = settings
+    app.state.llm_client = make_llm_client(settings)
+    app.state.store_registry = StoreRegistry(settings.kentro_state_dir)
+    try:
+        yield
+    finally:
+        # Best-effort cleanup. Iterate a copy because dispose() may not be re-entrant.
+        for store in list(app.state.store_registry._stores.values()):
+            store.dispose()
+
+
+app = FastAPI(title="kentro-server", version=__version__, lifespan=lifespan)
+
+
+def get_settings(request: Request) -> Settings:
+    return request.app.state.settings
+
+
+def get_llm_client(request: Request) -> LLMClient:
+    return request.app.state.llm_client
+
+
+def get_store_registry(request: Request) -> StoreRegistry:
+    return request.app.state.store_registry
+
+
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
+StoreRegistryDep = Annotated[StoreRegistry, Depends(get_store_registry)]
 
 
 @app.get("/healthz")
@@ -26,12 +61,8 @@ def healthz() -> dict[str, str]:
 
 
 @app.get("/llm/stats")
-def llm_stats() -> dict:
+def llm_stats(client: LLMClientDep) -> dict:
     """Cache hit/miss counters for the running process."""
-    try:
-        client = get_llm_client()
-    except LLMConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not isinstance(client, CachingLLMClient):
         return {"cache_enabled": False, "stats": None}
     s = client.stats
@@ -55,7 +86,7 @@ def start(
     log_level: str = typer.Option("info", help="uvicorn log level"),
 ) -> None:
     """Start the kentro-server FastAPI app."""
-    settings = get_settings()
+    settings = Settings()
     bind_host = host or settings.kentro_host
     bind_port = port or settings.kentro_port
     console.print(
