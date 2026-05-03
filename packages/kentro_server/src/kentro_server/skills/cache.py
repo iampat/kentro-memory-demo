@@ -112,18 +112,24 @@ class CachingLLMClient(LLMClient):
         self,
         *,
         document_text: str,
-        registered_entity_types: list[str],
+        registered_schemas: list,
         document_label: str | None = None,
         model: str | None = None,
     ) -> ExtractionResult:
         actual_model = model or _peek_attr(self.inner, "smart_model")
+        # Fingerprint the full schemas, not just names — different field declarations
+        # produce different extractor prompts and so different responses.
+        schema_payload = [
+            td.model_dump(mode="json") if hasattr(td, "model_dump") else td
+            for td in registered_schemas
+        ]
         cache_key = self._fingerprint(
             method="extract_entities",
             model=actual_model,
             response_class="ExtractionResult",
             payload={
                 "document_text": document_text,
-                "registered_entity_types": list(registered_entity_types),
+                "registered_schemas": schema_payload,
                 "document_label": document_label,
             },
         )
@@ -134,7 +140,7 @@ class CachingLLMClient(LLMClient):
             return cached
         result = self.inner.extract_entities(
             document_text=document_text,
-            registered_entity_types=registered_entity_types,
+            registered_schemas=registered_schemas,
             document_label=document_label,
             model=model,
         )

@@ -110,7 +110,7 @@ class LLMClient(ABC):
         self,
         *,
         document_text: str,
-        registered_entity_types: list[str],
+        registered_schemas: "list",  # list[EntityTypeDef] — Any to avoid an SDK->server cycle
         document_label: str | None = None,
         model: str | None = None,
     ) -> ExtractionResult: ...
@@ -137,7 +137,7 @@ class OfflineLLMClient(LLMClient):
             reason=self._UNAVAILABLE_REASON,
         )
 
-    def extract_entities(self, *, document_text, registered_entity_types, document_label=None, model=None):
+    def extract_entities(self, *, document_text, registered_schemas, document_label=None, model=None):
         raise LLMOfflineError(
             "OfflineLLMClient.extract_entities called — extraction requires a real LLM backend"
         )

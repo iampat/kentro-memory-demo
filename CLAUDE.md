@@ -43,6 +43,20 @@ no, the design is wrong.
 (Existing singletons in the codebase are flagged for cleanup in `IMPLEMENTATION_PLAN.md`
 under "Tech debt".)
 
+## Run tests before opening or updating a PR
+
+Before `git push` of any branch with code changes, ALWAYS run `uv run pytest tests/unit/`
+and confirm it's green. If you skipped this, do not open a PR; do not push the
+update. The current Python suite is hermetic (no LLM calls) and runs in well under
+five seconds. There is no excuse to skip it.
+
+If a test fails, do NOT modify the test to make it pass unless you are intentionally
+changing observed behavior — fix the implementation. If the failure is genuinely a
+test bug, fix the test in the same commit and call it out in the commit message.
+
+CI is intentionally not configured yet; this manual rule is the substitute. CI setup
+is on the IMPLEMENTATION_PLAN.md "deferred to the very end" list.
+
 ## Tracking work — `IMPLEMENTATION_PLAN.md` and `CHANGE_LOG.md`
 
 The repo holds two living documents that you MUST keep current:

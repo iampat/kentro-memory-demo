@@ -69,11 +69,11 @@ class GeminiLLMClient(LLMClient):
         self,
         *,
         document_text: str,
-        registered_entity_types: list[str],
+        registered_schemas: list,
         document_label: str | None = None,
         model: str | None = None,
     ) -> ExtractionResult:
-        user = _format_extract_user(document_text, registered_entity_types, document_label)
+        user = _format_extract_user(document_text, registered_schemas, document_label)
         return self._complete(
             model=model or self.smart_model,
             system=_EXTRACT_SYSTEM,
@@ -115,12 +115,20 @@ def _format_skill_user(policy: str, candidates: "list[FieldWriteRow]") -> str:
 
 def _format_extract_user(
     document_text: str,
-    registered_entity_types: list[str],
+    registered_schemas: list,
     document_label: str | None,
 ) -> str:
+    chunks: list[str] = []
+    for td in registered_schemas:
+        chunks.append(f"- {td.name}:")
+        for f in td.fields:
+            req = "required" if f.required else "optional"
+            default = f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
+            chunks.append(f"    * {f.name}: {f.type_str} ({req}){default}")
+    schema_block = "\n".join(chunks)
     header = f"DOCUMENT LABEL: {document_label}\n" if document_label else ""
     return (
-        f"REGISTERED ENTITY TYPES: {', '.join(registered_entity_types)}\n\n"
+        f"REGISTERED SCHEMA:\n{schema_block}\n\n"
         f"{header}DOCUMENT:\n{document_text}"
     )
 

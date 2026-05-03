@@ -12,7 +12,7 @@ import pytest
 from sqlmodel import col, select
 
 from kentro_server.core.conflict import record_field_write
-from kentro_server.store import StoreRegistry, TenantStore
+from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
 from kentro_server.store.models import (
     AgentRow,
     ConflictRow,
@@ -24,7 +24,8 @@ from kentro_server.store.models import (
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    reg = StoreRegistry(tmp_path / "kentro_state")
+    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    reg = TenantRegistry(tmp_path / "kentro_state", config)
     s = reg.get("demo-1")
     with s.session() as session:
         session.add(AgentRow(id="ingestion_agent"))

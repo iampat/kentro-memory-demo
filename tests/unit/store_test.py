@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import select
 
-from kentro_server.store import StoreRegistry
+from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig
 from kentro_server.store.models import (
     AgentRow,
     DocumentRow,
@@ -17,12 +17,21 @@ from kentro_server.store.models import (
 )
 
 
+def _make_registry(state_dir: Path, *tenant_ids: str) -> TenantRegistry:
+    config = TenantsConfig(
+        tenants=tuple(
+            TenantConfig(id=tid, api_key=f"{tid}-key") for tid in tenant_ids
+        )
+    )
+    return TenantRegistry(state_dir, config)
+
+
 @pytest.fixture
-def registry(tmp_path: Path) -> StoreRegistry:
-    return StoreRegistry(tmp_path / "kentro_state")
+def registry(tmp_path: Path) -> TenantRegistry:
+    return _make_registry(tmp_path / "kentro_state", "demo-1", "demo-2")
 
 
-def test_tenant_store_creates_schema(registry: StoreRegistry) -> None:
+def test_tenant_store_creates_schema(registry: TenantRegistry) -> None:
     store = registry.get("demo-1")
     if not store.tenant_dir.exists():
         raise AssertionError("tenant dir missing after construction")
@@ -34,7 +43,7 @@ def test_tenant_store_creates_schema(registry: StoreRegistry) -> None:
         raise AssertionError("state.sqlite not created")
 
 
-def test_round_trip_agent_and_entity_and_field_write(registry: StoreRegistry) -> None:
+def test_round_trip_agent_and_entity_and_field_write(registry: TenantRegistry) -> None:
     store = registry.get("demo-1")
 
     with store.session() as s:
@@ -69,7 +78,7 @@ def test_round_trip_agent_and_entity_and_field_write(registry: StoreRegistry) ->
             raise AssertionError(f"unexpected value_json: {rows[0].value_json!r}")
 
 
-def test_blob_store_put_get_delete(registry: StoreRegistry) -> None:
+def test_blob_store_put_get_delete(registry: TenantRegistry) -> None:
     store = registry.get("demo-1")
     key = f"{uuid4()}.md"
     content = b"# Acme call notes\n\nRenewal floated at $250K."
@@ -83,13 +92,13 @@ def test_blob_store_put_get_delete(registry: StoreRegistry) -> None:
         raise AssertionError("blob still present after delete")
 
 
-def test_blob_store_rejects_path_escape(registry: StoreRegistry) -> None:
+def test_blob_store_rejects_path_escape(registry: TenantRegistry) -> None:
     store = registry.get("demo-1")
     with pytest.raises(ValueError, match="escapes store root"):
         store.blobs.put("../escape.md", b"nope")
 
 
-def test_two_tenants_are_isolated(registry: StoreRegistry) -> None:
+def test_two_tenants_are_isolated(registry: TenantRegistry) -> None:
     a = registry.get("demo-1")
     b = registry.get("demo-2")
 
@@ -112,7 +121,7 @@ def test_two_tenants_are_isolated(registry: StoreRegistry) -> None:
         raise AssertionError(f"tenant B leaked: {b_agent.display_name}")
 
 
-def test_reset_tenant_wipes_state(registry: StoreRegistry) -> None:
+def test_reset_tenant_wipes_state(registry: TenantRegistry) -> None:
     store = registry.get("demo-1")
     with store.session() as s:
         s.add(AgentRow(id="sales"))
@@ -123,12 +132,68 @@ def test_reset_tenant_wipes_state(registry: StoreRegistry) -> None:
         raise AssertionError("tenant not listed before reset")
 
     registry.reset("demo-1")
-    if "demo-1" in registry.known_tenants():
-        raise AssertionError("tenant still on disk after reset")
 
-    # Re-creating the tenant should give an empty schema, not the old data.
-    fresh = registry.get("demo-1")
-    with fresh.session() as s:
+    # The tenant remains in the registry (per its config entry), but with empty state.
+    if "demo-1" not in registry.known_tenants():
+        raise AssertionError("tenant should be re-created from config after reset")
+    with registry.get("demo-1").session() as s:
         agents = s.exec(select(AgentRow)).all()
         if agents:
             raise AssertionError(f"reset failed: still see agents {agents!r}")
+
+
+def test_invalid_tenant_id_rejected(tmp_path: Path) -> None:
+    """Codex finding: tenant IDs that escape the state root must be rejected."""
+    bad_config = TenantsConfig(
+        tenants=(TenantConfig(id="../escape", api_key="x"),),
+    )
+    with pytest.raises(ValueError, match="invalid tenant_id"):
+        TenantRegistry(tmp_path / "kentro_state", bad_config)
+
+
+def test_unknown_tenant_id_raises(registry: TenantRegistry) -> None:
+    with pytest.raises(KeyError, match="unknown tenant_id"):
+        registry.get("not-configured")
+
+
+def test_lookup_by_api_key(registry: TenantRegistry) -> None:
+    store = registry.by_api_key("demo-1-key")
+    if store.tenant_id != "demo-1":
+        raise AssertionError(f"api-key lookup wrong: got {store.tenant_id}")
+    with pytest.raises(KeyError, match="unknown api_key"):
+        registry.by_api_key("not-a-real-key")
+
+
+def test_blob_store_rejects_sibling_prefix(registry: TenantRegistry) -> None:
+    """Codex finding: string-prefix path check let `/state/docs2/x` pass when root was `/state/docs`."""
+    store = registry.get("demo-1")
+    sibling = store.docs_dir.parent / (store.docs_dir.name + "2")
+    sibling.mkdir(exist_ok=True)
+    rel_to_root = sibling.relative_to(store.docs_dir.parent)
+    bad_key = f"../{rel_to_root}/secret.txt"
+    with pytest.raises(ValueError, match="escapes store root"):
+        store.blobs.put(bad_key, b"secret")
+
+
+def test_blob_store_rejects_absolute_key(registry: TenantRegistry) -> None:
+    store = registry.get("demo-1")
+    with pytest.raises(ValueError, match="must be a relative path"):
+        store.blobs.put("/etc/passwd", b"x")
+
+
+def test_from_paths_creates_default_when_missing(tmp_path: Path) -> None:
+    config_path = tmp_path / "tenants.json"
+    state_dir = tmp_path / "kentro_state"
+    if config_path.exists():
+        raise AssertionError("precondition: tenants.json should not exist")
+
+    registry = TenantRegistry.from_paths(state_dir=state_dir, config_path=config_path)
+
+    if not config_path.exists():
+        raise AssertionError("from_paths must create tenants.json on first run")
+    if "local" not in registry.known_tenants():
+        raise AssertionError(f"default tenant 'local' missing: {registry.known_tenants()}")
+    # Re-load from the same file: tenants persist.
+    registry2 = TenantRegistry.from_paths(state_dir=state_dir, config_path=config_path)
+    if registry2.known_tenants() != ["local"]:
+        raise AssertionError(f"tenants didn't persist: {registry2.known_tenants()}")

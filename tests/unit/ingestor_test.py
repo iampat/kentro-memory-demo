@@ -18,7 +18,7 @@ from kentro_server.skills.llm_client import (
     LLMClient,
     SkillResolverDecision,
 )
-from kentro_server.store import StoreRegistry, TenantStore
+from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
 from kentro_server.store.models import (
     AgentRow,
     ConflictRow,
@@ -40,7 +40,7 @@ class _FakeExtractor(LLMClient):
     def run_skill_resolver(self, *, prompt, candidates, model=None):
         return SkillResolverDecision(chosen_value_json=None, reason="not under test")
 
-    def extract_entities(self, *, document_text, registered_entity_types, document_label=None, model=None):
+    def extract_entities(self, *, document_text, registered_schemas, document_label=None, model=None):
         self.extract_call_count += 1
         if not self.queue:
             return ExtractionResult(entities=())
@@ -49,7 +49,8 @@ class _FakeExtractor(LLMClient):
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    reg = StoreRegistry(tmp_path / "kentro_state")
+    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    reg = TenantRegistry(tmp_path / "kentro_state", config)
     s = reg.get("demo-1")
     with s.session() as session:
         session.add(AgentRow(id="ingestion_agent"))
@@ -58,7 +59,19 @@ def store(tmp_path: Path) -> TenantStore:
     return s
 
 
-REGISTERED = ["Customer", "Person"]
+from kentro.types import EntityTypeDef, FieldDef
+
+REGISTERED = [
+    EntityTypeDef(name="Customer", fields=(
+        FieldDef(name="name", type_str="str"),
+        FieldDef(name="deal_size", type_str="float | None", required=False),
+    )),
+    EntityTypeDef(name="Person", fields=(
+        FieldDef(name="name", type_str="str"),
+        FieldDef(name="phone", type_str="str | None", required=False),
+        FieldDef(name="email", type_str="str | None", required=False),
+    )),
+]
 
 
 def test_single_doc_single_entity_writes_blob_doc_row_extraction_step_and_field(store: TenantStore) -> None:
@@ -77,7 +90,7 @@ def test_single_doc_single_entity_writes_blob_doc_row_extraction_step_and_field(
         llm=llm,
         content=content,
         label="acme_call.md",
-        registered_entity_types=REGISTERED,
+        registered_schemas=REGISTERED,
         written_by_agent_id="ingestion_agent",
         rule_version=1,
         smart_model="claude-sonnet-4-6",
@@ -141,7 +154,7 @@ def test_two_docs_same_entity_different_fields_hydrates_one_entity(store: Tenant
         store=store, llm=llm,
         content=b"meeting note 1: Ali phone 778-968-1361",
         label="ali_phone.md",
-        registered_entity_types=REGISTERED,
+        registered_schemas=REGISTERED,
         written_by_agent_id="ingestion_agent",
         rule_version=1, smart_model="claude-sonnet-4-6",
     )
@@ -149,7 +162,7 @@ def test_two_docs_same_entity_different_fields_hydrates_one_entity(store: Tenant
         store=store, llm=llm,
         content=b"meeting note 2: Ali email ali@kentro.ai",
         label="ali_email.md",
-        registered_entity_types=REGISTERED,
+        registered_schemas=REGISTERED,
         written_by_agent_id="ingestion_agent",
         rule_version=1, smart_model="claude-sonnet-4-6",
     )
@@ -182,7 +195,7 @@ def test_two_docs_same_field_different_values_creates_conflict(store: TenantStor
     for content, label in [(b"transcript with $250K", "call.md"), (b"email with $300K", "email.md")]:
         ingest_document(
             store=store, llm=llm, content=content, label=label,
-            registered_entity_types=REGISTERED,
+            registered_schemas=REGISTERED,
             written_by_agent_id="ingestion_agent",
             rule_version=1, smart_model="claude-sonnet-4-6",
         )
@@ -205,7 +218,7 @@ def test_extractor_returning_unregistered_entity_type_is_skipped(store: TenantSt
     result = ingest_document(
         store=store, llm=llm, content=b"sci-fi notes",
         label="not_relevant.md",
-        registered_entity_types=REGISTERED,
+        registered_schemas=REGISTERED,
         written_by_agent_id="ingestion_agent",
         rule_version=1, smart_model="claude-sonnet-4-6",
     )
