@@ -141,7 +141,7 @@ All three share the same LLM client abstraction. Adding a new LLM-call site late
 The high-level paths through the system, in plain English. Detailed schemas live in Step 2.
 
 - **Ingestion path:** SDK → `POST /documents` → server stores blob → extractor LLM call (structured output) → entities and edges written to SQLite with lineage edges to the document → response carries the `IngestionResult`.
-- **Read path:** SDK → `GET /entities/{type}/{key}` → server fetches all field values + their lineage → ACL evaluator filters the field set against the calling agent's rules → conflict-resolver resolves any conflicts (using the `resolver` parameter) → response carries the `EntityRecord` with `FieldValue` per field.
+- **Read path:** SDK → `GET /entities/{type}/{key}` → server fetches all field values + their lineage → ACL evaluator filters the field set against the calling agent's rules → conflict-resolver resolves any conflicts (using the `resolver` parameter). If the resolver is a `SkillResolver` whose skill emits workflow actions alongside the winner pick (e.g. `{type: "write_entity", entity_type: "Ticket", ...}` or `{type: "notify", channel: "#deals-review", ...}`), the orchestrator executes those actions through the same ACL gate as a regular write — Skills cannot bypass governance. Response carries the `EntityRecord` with `FieldValue` per field; resolved fields with attached tickets carry the ticket reference inline.
 - **Write path:** SDK → `POST /entities/{type}/{key}` → server checks write ACL → if conflict with existing value, both stored → response carries `WriteResult` with typed status.
 - **Rule-change path:** SDK → `POST /rules` (atomic) → server applies the new `RuleSet` → no record-level re-ingestion happens, just a rule-version bump. Subsequent reads/writes evaluate against the new rules.
 - **NL rule parse:** SDK → `POST /rules/parse` → server runs `nl_to_ruleset` skill → returns parsed `RuleSet`. Caller reviews, then calls `POST /rules` to apply.
@@ -192,7 +192,9 @@ _To be written. Inputs / outputs / contract for the function that decides whethe
 
 ## Step 5 — Conflict detection & resolvers
 
-_To be written. Detection logic on writes. Resolver interface. Implementations of `LatestWriteResolver`, `PreferAgent`, `SkillResolver`. The `UNRESOLVED` path._
+_To be written. Detection logic on writes. Resolver interface. Implementations of `LatestWriteResolver`, `PreferAgent`, `SkillResolver`. The `UNRESOLVED` path. **`SkillResolverDecision` carries an optional `actions` tuple** so a Skill can emit workflow steps alongside its winner pick (e.g. create a `Ticket` entity, fire a notification). The orchestrator executes each action through the same ACL gate as a regular write — Skills can't bypass governance. The notification primitive is a console log + websocket event for v0; real Slack integration is v0.1. **No separate `HumanReviewResolver` class** — "human review" is one shape a Skill can take, authored entirely in the Skill's markdown file (no Python required for new policies)._
+
+**Status (2026-05-03):** core resolvers shipped; `SkillResolverDecision.actions` extension is logged as a v0-follow-up TODO in `kentro_server/skills/llm_client.py` and tracked in `IMPLEMENTATION_PLAN.md` "Deferred to the very end" — needs to land before the Step 10 UI exercises the workflow-trigger demo beat.
 
 ## Step 6 — Ingestion & entity extraction
 
@@ -215,6 +217,8 @@ _To be written. `viz.access_matrix()`, `viz.entity_graph()`, `viz.lineage(...)`,
 _To be written._ The UI is a single-page app for the recorded video, scene-by-scene component layout, with the four-dimensional rule-change animation. **It does not deploy separately.** The build output is copied into `packages/kentro_server/src/kentro_server/static/` and mounted by FastAPI's `StaticFiles` so the entire demo runs from one origin (locally and on GCP).
 
 Open sub-decision (resolve at the start of Step 10): keep Next.js with `output: 'export'` (static export) OR drop Next.js for **Vite + React + Tailwind + shadcn/ui**. Recommendation: Vite — none of the SSR / middleware / server-action features Next.js gives are useful here, and the Vite build is a clean static-asset emit with no Next.js runtime to wrangle.
+
+Includes two small components for the workflow-trigger story: **`<TicketBadge ticketId={...} />`** rendered inline next to a resolved field when an attached ticket exists, and **`<EscalationToast />`** that slides in for ~3 seconds when a Skill emits a workflow action (renders "Ticket #X created · sales-lead notified · Slack #deals-review"). Both components are minimal — combined ~50 lines — and reuse the existing field-rendering and toast-notification patterns. They depend on the `SkillResolverDecision.actions` server-side extension (see Step 5 status note) — must land before Step 10 begins.
 
 ## Step 11 — Synthetic corpus & scenario test
 
