@@ -228,7 +228,10 @@ def _register_tools(mcp: FastMCP) -> None:
                 "entity_key": subject,
                 "reason": acl.reason,
             }
+        # Populate `subject` mirroring the HTTP route — see routes/memory.py
+        # for rationale (avoids reads always showing Note.subject as UNKNOWN).
         fields = {
+            "subject": json.dumps(subject),
             "predicate": json.dumps(predicate),
             # Single dumps: persists canonical JSON; one decode on read returns
             # the original value. The previous double-dumps left object_json as

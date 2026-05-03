@@ -355,6 +355,12 @@ def test_remember_writes_to_note_entity(client: TestClient) -> None:
     fields = r.json()["fields"]
     if fields["predicate"]["value"] != "scheduled_at":
         raise AssertionError(f"predicate mismatch: {fields['predicate']!r}")
+    # Subject is now populated on write (post-2026-05-03 cleanup) — must equal
+    # the entity_key, not be UNKNOWN like it was historically.
+    if fields["subject"]["status"] != "known" or fields["subject"]["value"] != "demo-prep":
+        raise AssertionError(
+            f"subject should be populated from entity_key, got {fields['subject']!r}"
+        )
     # Roundtrip correctness: stored as canonical JSON, decoded once on read.
     if fields["object_json"]["value"] != "2026-05-10T14:00:00Z":
         raise AssertionError(

@@ -7,8 +7,20 @@ Re-exports the user-facing surface so the canonical example works:
     class Customer(kentro.Entity):
         name: str
         deal_size: float | None = None
+
+    with kentro.Client(base_url=..., api_key=...) as client:
+        record = client.read("Customer", "Acme")
 """
 
+from kentro.client import (
+    AdminRequiredError,
+    AuthError,
+    Client,
+    KentroError,
+    NotFoundError,
+    SchemaEvolutionError,
+    ServerError,
+)
 from kentro.resolvers import (
     AutoResolver,
     LatestWriteResolver,
@@ -17,6 +29,7 @@ from kentro.resolvers import (
     Resolver,
     SkillResolver,
 )
+from kentro.rules import RuleSetDiff, render_rule, ruleset_diff
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     Agent,
@@ -47,8 +60,11 @@ from kentro.types import (
 __version__ = "0.0.0"
 
 __all__ = [
+    "AdminRequiredError",
     "Agent",
+    "AuthError",
     "AutoResolver",
+    "Client",
     "Conflict",
     "ConflictRule",
     "Entity",
@@ -62,20 +78,27 @@ __all__ = [
     "FieldValue",
     "FieldValueCandidate",
     "IngestionResult",
+    "KentroError",
     "LatestWriteResolver",
     "LineageRecord",
     "NLIntent",
     "NLResponse",
+    "NotFoundError",
     "PreferAgent",
     "RawResolver",
     "ReevaluationReport",
     "Resolver",
     "Rule",
     "RuleSet",
+    "RuleSetDiff",
+    "SchemaEvolutionError",
+    "ServerError",
     "SkillResolver",
     "WriteResult",
     "WriteRule",
     "WriteStatus",
     "__version__",
     "entity_type_def_from",
+    "render_rule",
+    "ruleset_diff",
 ]

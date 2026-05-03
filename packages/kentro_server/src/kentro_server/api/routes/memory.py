@@ -88,7 +88,12 @@ def remember(
             reason=acl.reason,
         )
 
+    # Populate `subject` so reads have a value (the v0.1 follow-up from the
+    # 2026-05-03 lineage walkthrough). The subject is also the entity_key, so
+    # this is technically redundant — but having both lets a UI render the Note
+    # without having to know that "the entity_key IS the subject."
     fields_to_write: dict[str, str] = {
+        "subject": json.dumps(body.subject),
         "predicate": json.dumps(body.predicate),
         # Single dumps: stores canonical JSON; one decode on read returns original.
         "object_json": json.dumps(body.object_json),
