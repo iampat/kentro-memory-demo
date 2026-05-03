@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
+from typing import Self
 
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
@@ -119,7 +120,7 @@ class TenantRegistry:
                     self._admin_keys.add(acfg.api_key)
 
     @classmethod
-    def from_paths(cls, *, state_dir: Path, config_path: Path) -> "TenantRegistry":
+    def from_paths(cls, *, state_dir: Path, config_path: Path) -> Self:
         """Load tenants from `config_path`, auto-creating a default if absent.
 
         `config_path` is intentionally separate from `state_dir`: the tenants file is

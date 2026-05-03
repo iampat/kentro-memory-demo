@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from kentro.schema import entity_type_def_from
 from kentro.types import Entity, EntityTypeDef, FieldDef
-from kentro_server.core.schema_registry import SchemaRegistry
+from kentro_server.core.schema_registry import SchemaEvolutionError, SchemaRegistry
 from kentro_server.store import (
     AgentConfig,
     TenantConfig,
@@ -113,8 +113,6 @@ def test_idempotent_re_register_is_noop(store: TenantStore) -> None:
 
 def test_register_rejects_field_removal(store: TenantStore) -> None:
     """Removing a field is denied — deprecate instead."""
-    from kentro_server.core.schema_registry import SchemaEvolutionError
-
     reg = SchemaRegistry(store)
     reg.register(
         EntityTypeDef(
@@ -131,8 +129,6 @@ def test_register_rejects_field_removal(store: TenantStore) -> None:
 
 def test_register_rejects_type_change(store: TenantStore) -> None:
     """Changing a field's type is denied — add a new field with the new type."""
-    from kentro_server.core.schema_registry import SchemaEvolutionError
-
     reg = SchemaRegistry(store)
     reg.register(EntityTypeDef(name="Customer", fields=(FieldDef(name="age", type_str="int"),)))
     with pytest.raises(SchemaEvolutionError, match="changing type"):

@@ -11,6 +11,8 @@ e.g. `local-sales-do-not-share`). For a real deployment, add hashing + rotation
 on top.
 """
 
+from typing import Self
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -41,7 +43,7 @@ class TenantConfig(BaseModel):
     agents: tuple[AgentConfig, ...] = ()
 
     @model_validator(mode="after")
-    def _agents_unique(self) -> "TenantConfig":
+    def _agents_unique(self) -> Self:
         seen: set[str] = set()
         for a in self.agents:
             if a.id in seen:
@@ -58,7 +60,7 @@ class TenantsConfig(BaseModel):
     tenants: tuple[TenantConfig, ...] = ()
 
     @model_validator(mode="after")
-    def _no_duplicate_ids_or_keys(self) -> "TenantsConfig":
+    def _no_duplicate_ids_or_keys(self) -> Self:
         """Reject duplicate tenant IDs or duplicate api_keys at load time.
 
         A duplicate api_key — even across tenants — is an auth/isolation hole:
