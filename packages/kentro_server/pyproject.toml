@@ -16,6 +16,8 @@ dependencies = [
     "rich>=13.9",
     "instructor>=1.7",
     "httpx>=0.27",
+    "anthropic>=0.97",
+    "google-genai>=1.74",
 ]
 
 [project.scripts]
