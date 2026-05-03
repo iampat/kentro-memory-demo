@@ -20,6 +20,7 @@ dependencies = [
     "anthropic>=0.97",
     "google-genai>=1.74",
     "mcp>=1.0",
+    "alembic>=1.13",
 ]
 
 [project.scripts]

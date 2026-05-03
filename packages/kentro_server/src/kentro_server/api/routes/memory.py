@@ -29,14 +29,12 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException, status
-from kentro.acl import evaluate_write
 from kentro.types import WriteResult, WriteStatus
 
 from kentro_server.api.auth import PrincipalDep
 from kentro_server.api.deps import SchemaRegistryDep
 from kentro_server.api.dtos import RememberRequest
-from kentro_server.core.rules import load_active_ruleset
-from kentro_server.core.write import write_field
+from kentro_server.core.write import write_fields_bulk
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +49,22 @@ def remember(
     principal: PrincipalDep,
     schema: SchemaRegistryDep,
 ) -> WriteResult:
-    """Write `(predicate, object_json, source_label)` onto Note keyed by `subject`.
+    """Write `(subject, predicate, object_json, source_label)` onto Note atomically.
 
-    ACL is evaluated once up-front against the *Note entity* (using `field_name=None`
-    to ask "may this agent write to Note at all?"). If denied, return the denial
-    immediately without attempting any per-field writes — eliminates the wasted
-    round-trip of the previous implementation.
+    All three or four field writes commit in **one transaction** via
+    `write_fields_bulk`. ACL is pre-evaluated for every field against the same
+    loaded ruleset; if any field would be denied, none are written, and the
+    denial reason is returned. Codex 2026-05-03 high finding fix: the previous
+    per-field loop could persist subject+predicate then fail on object_json,
+    leaving a half-written Note that read as real state.
 
-    On allow, two-or-three field writes follow. Each is independent and recorded
-    via the standard `write_field` path so corroboration / conflict semantics
-    apply uniformly with structured ingestion.
+    Returns the last `WriteResult` (object_json, OR source_label when present)
+    so the response shape is unchanged from before. Callers checking
+    `status==CONFLICT_RECORDED` and the `conflict_id` should be aware: with
+    multiple fields written atomically, EACH field can independently produce
+    a conflict; here we only return the last one. The HTTP shape is unchanged
+    for v0; a future `/memory/remember` endpoint can return all results if
+    needed.
     """
     if not body.subject.strip():
         raise HTTPException(
@@ -71,57 +75,34 @@ def remember(
     if schema.get(_NOTE_TYPE) is None:
         schema.list_all()
 
-    # ACL once, against the wildcard Note write. If the agent has zero write
-    # permission on Note, bail before issuing any writes.
-    ruleset = load_active_ruleset(principal.store)
-    acl = evaluate_write(
-        entity_type=_NOTE_TYPE,
-        field_name=None,
-        agent_id=principal.agent_id,
-        ruleset=ruleset,
-    )
-    if not acl.allowed:
-        return WriteResult(
-            status=WriteStatus.PERMISSION_DENIED,
-            entity_type=_NOTE_TYPE,
-            entity_key=body.subject,
-            reason=acl.reason,
-        )
-
     # Populate `subject` so reads have a value (the v0.1 follow-up from the
-    # 2026-05-03 lineage walkthrough). The subject is also the entity_key, so
-    # this is technically redundant — but having both lets a UI render the Note
+    # 2026-05-03 lineage walkthrough). Subject is also the entity_key, so this
+    # is technically redundant — but having both lets a UI render the Note
     # without having to know that "the entity_key IS the subject."
-    fields_to_write: dict[str, str] = {
-        "subject": json.dumps(body.subject),
-        "predicate": json.dumps(body.predicate),
+    fields: list[tuple[str, str, float | None]] = [
+        ("subject", json.dumps(body.subject), body.confidence),
+        ("predicate", json.dumps(body.predicate), body.confidence),
         # Single dumps: stores canonical JSON; one decode on read returns original.
-        "object_json": json.dumps(body.object_json),
-    }
+        ("object_json", json.dumps(body.object_json), body.confidence),
+    ]
     if body.source_label is not None:
-        fields_to_write["source_label"] = json.dumps(body.source_label)
+        fields.append(("source_label", json.dumps(body.source_label), body.confidence))
 
-    last_result: WriteResult | None = None
-    for field_name, value_json in fields_to_write.items():
-        last_result = write_field(
-            store=principal.store,
-            schema=schema,
-            agent_id=principal.agent_id,
-            entity_type=_NOTE_TYPE,
-            entity_key=body.subject,
-            field_name=field_name,
-            value_json=value_json,
-            confidence=body.confidence,
-        )
-        # Per-field PD can still happen if a more specific FieldReadRule for one
-        # of the Note fields denies this agent — bail then too, same reasoning.
-        if last_result.status == WriteStatus.PERMISSION_DENIED:
-            break
-
-    # last_result is non-None: fields_to_write always has predicate + object_json.
-    if last_result is None:  # pragma: no cover — defensive, fields_to_write is non-empty
+    results = write_fields_bulk(
+        store=principal.store,
+        schema=schema,
+        agent_id=principal.agent_id,
+        entity_type=_NOTE_TYPE,
+        entity_key=body.subject,
+        fields=fields,
+    )
+    if not results:  # pragma: no cover — fields is always non-empty
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="remember: no fields written (internal logic error)",
         )
-    return last_result
+    # If anything denied, return the first PD (with the meaningful reason).
+    for r in results:
+        if r.status == WriteStatus.PERMISSION_DENIED:
+            return r
+    return results[-1]

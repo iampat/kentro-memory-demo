@@ -307,13 +307,68 @@ class Entity(BaseModel):
     model_config = ConfigDict(frozen=False)
 
 
+# === List-endpoint response shapes (added 2026-05-03 for the demo UI) ===
+#
+# These are the wire-form responses for `GET /entities/{type}` and
+# `GET /documents` — added so the prototype UI can render its left-pane
+# entity/document lists from real server data without hitting per-key
+# read endpoints in a loop.
+
+
+class EntitySummary(BaseModel):
+    """One row in `GET /entities/{type}` — `(type, key, created_at, field_count)`.
+
+    `field_count` is the count of distinct (live) field writes on this entity;
+    used by the demo UI to show "[5 fields]" badges without having to read each
+    entity. Filtered by ACL: an entity hidden from the caller via
+    `EntityVisibilityRule` doesn't appear in the list.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    type: str
+    key: str
+    field_count: int = 0
+
+
+class EntityListResponse(BaseModel):
+    """Response shape for `GET /entities/{type}`."""
+
+    model_config = ConfigDict(frozen=True)
+    entity_type: str
+    entities: tuple[EntitySummary, ...] = ()
+
+
+class DocumentSummary(BaseModel):
+    """One row in `GET /documents` — surfacing label, source_class, ingest time."""
+
+    model_config = ConfigDict(frozen=True)
+    id: str  # UUID as string for JSON friendliness
+    label: str | None = None
+    source_class: str | None = None
+    content_hash: str
+    created_at: str  # ISO8601 datetime
+    blob_key: str
+    field_write_count: int = 0
+
+
+class DocumentListResponse(BaseModel):
+    """Response shape for `GET /documents`."""
+
+    model_config = ConfigDict(frozen=True)
+    documents: tuple[DocumentSummary, ...] = ()
+
+
 __all__ = [
     "Agent",
     "AutoResolverSpec",
     "Conflict",
     "ConflictRule",
+    "DocumentListResponse",
+    "DocumentSummary",
     "Entity",
+    "EntityListResponse",
     "EntityRecord",
+    "EntitySummary",
     "EntityTypeDef",
     "EntityVisibilityRule",
     "ExtractionStep",

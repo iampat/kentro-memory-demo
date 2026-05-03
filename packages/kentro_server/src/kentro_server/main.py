@@ -22,13 +22,14 @@ from rich.console import Console
 
 from kentro_server import __version__
 from kentro_server.api import (
+    demo_router,
     documents_router,
     entities_router,
     memory_router,
     rules_router,
     schema_router,
 )
-from kentro_server.demo import AuditLog, Customer, Deal, Person
+from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import cache_metadata, cache_stats, make_llm_client
@@ -100,15 +101,17 @@ _DEMO_KEY_PATTERNS = (
 )
 
 
-def _warn_on_demo_keys_in_prod(registry: TenantRegistry, prod_mode: bool) -> None:
-    """If `KENTRO_PROD_MODE=true`, refuse to boot when any default-demo key is in tenants.json.
+def _enforce_demo_key_opt_in(registry: TenantRegistry, allow_demo_keys: bool) -> None:
+    """Refuse to boot when committed demo keys are present unless `allow_demo_keys` is True.
 
-    The committed tenants.json defaults are advertised "do-not-share" demo
-    placeholders. Catching them at boot in prod prevents the embarrassing case
-    where a deployment ships with the public README's keys still active.
+    Inverted from the original `kentro_prod_mode` design (codex 2026-05-03 critical):
+    the failure mode used to be "operator must remember to flip on prod-mode";
+    now it's "operator must explicitly opt INTO using demo keys". The default
+    (`allow_demo_keys=False`) makes the safe path the no-config path.
 
-    In dev (default), we log a warning instead of refusing — the demo is the
-    expected path.
+    For local development, `task dev` sets `KENTRO_ALLOW_DEMO_KEYS=true`. For
+    any deployment touching a non-loopback bind, rotate the keys instead of
+    flipping the opt-in.
     """
     leaked: list[str] = []
     for tcfg in registry.config.tenants:
@@ -118,12 +121,14 @@ def _warn_on_demo_keys_in_prod(registry: TenantRegistry, prod_mode: bool) -> Non
     if not leaked:
         return
     msg = (
-        f"tenants.json contains default demo keys for: {', '.join(leaked)} — "
-        "these keys are documented publicly. ROTATE before exposing this server."
+        f"tenants.json contains publicly-documented demo keys for: {', '.join(leaked)}. "
+        "Rotate these keys before serving this process on a non-loopback interface, "
+        "OR set KENTRO_ALLOW_DEMO_KEYS=true to acknowledge and proceed (intended for "
+        "local development only — `task dev` sets this for you)."
     )
-    if prod_mode:
-        raise RuntimeError(f"refusing to boot in KENTRO_PROD_MODE: {msg}")
-    logger.warning("DEMO-KEY WARNING: %s", msg)
+    if not allow_demo_keys:
+        raise RuntimeError(f"refusing to boot with demo keys: {msg}")
+    logger.warning("DEMO-KEY OPT-IN ACTIVE: %s", msg)
 
 
 @asynccontextmanager
@@ -149,7 +154,7 @@ async def lifespan(app: FastAPI):
             config_path=settings.kentro_tenants_json,
         )
         app.state.tenant_registry = registry
-        _warn_on_demo_keys_in_prod(registry, prod_mode=settings.kentro_prod_mode)
+        _enforce_demo_key_opt_in(registry, allow_demo_keys=settings.kentro_allow_demo_keys)
         # Fresh FastMCP per lifespan cycle (see _LazyMcpMount docstring).
         mcp = build_mcp()
         _mcp_mount.attach(AuthMiddleware(mcp.streamable_http_app()))
@@ -173,6 +178,7 @@ app.include_router(entities_router)
 app.include_router(rules_router)
 app.include_router(schema_router)
 app.include_router(memory_router)
+app.include_router(demo_router)
 
 # Mount the lazy delegator; lifespan attaches the real MCP sub-app each cycle.
 app.mount("/mcp", _mcp_mount)
@@ -309,15 +315,24 @@ def seed_demo(
     skip_ingest: bool = typer.Option(
         False,
         "--skip-ingest",
-        help="Register schema only; don't ingest the corpus markdown files.",
+        help="Register schema + apply rules; don't ingest the corpus markdown files.",
+    ),
+    skip_rules: bool = typer.Option(
+        False,
+        "--skip-rules",
+        help="Don't apply the initial demo ruleset (Sales/CS/AuditLog ACLs + latest-write).",
     ),
 ) -> None:
-    """Register the demo schemas, then ingest every markdown file in `examples/synthetic_corpus/`.
+    """Register demo schemas, apply initial demo ACLs, then ingest the corpus.
 
-    This is the one-line "make a fresh tenant ready to demo" command. Idempotent
-    — register is no-op for unchanged definitions, and re-ingest of the same
-    blob produces a new document row but the field writes are corroboration on
-    top of the prior ones (no conflicts unless content differs).
+    One-line "make a fresh tenant ready to demo" command. Three phases, each
+    idempotent so re-running is safe:
+      1. POST /schema/register with the four demo entity types.
+      2. POST /rules/apply with `initial_demo_ruleset()` (Sales/CS/AuditLog
+         access boundaries + latest-write conflict resolver). Without this,
+         the right pane in the UI is empty and the ingestion_agent's
+         /documents writes are silently dropped by default-deny ACL.
+      3. POST /documents for every markdown file in `examples/synthetic_corpus/`.
     """
     # main.py is at packages/kentro_server/src/kentro_server/main.py — parents[4] is the repo root.
     repo_root = Path(__file__).resolve().parents[4]
@@ -342,6 +357,19 @@ def seed_demo(
         raise typer.Exit(code=1)
     registered = [td["name"] for td in r.json()["type_defs"]]
     console.print(f"[green]registered schemas[/green]: {registered}")
+
+    if not skip_rules:
+        ruleset = initial_demo_ruleset()
+        body = {"ruleset": ruleset.model_dump(mode="json")}
+        r = httpx.post(f"{base}/rules/apply", headers=headers, json=body, timeout=10.0)
+        if r.status_code != 200:
+            console.print(f"[red]/rules/apply failed[/red] {r.status_code}: {r.text}")
+            raise typer.Exit(code=1)
+        version = r.json().get("version", "?")
+        console.print(
+            f"[green]applied demo ruleset[/green] (version {version}, "
+            f"{len(ruleset.rules)} rules — sales/cs/auditlog access + latest-write)"
+        )
 
     if skip_ingest:
         console.print("--skip-ingest set; not ingesting corpus.")

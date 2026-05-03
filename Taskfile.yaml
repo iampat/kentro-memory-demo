@@ -21,6 +21,7 @@ tasks:
     desc: Run the kentro-server locally (auto-reload on .py changes)
     env:
       KENTRO_STATE_DIR: '{{.STATE_DIR}}'
+      KENTRO_ALLOW_DEMO_KEYS: 'true'
     cmds:
       - uv run uvicorn kentro_server.main:app --reload --host {{.HOST}} --port {{.PORT}}
 
@@ -30,15 +31,70 @@ tasks:
       - open http://{{.HOST}}:{{.PORT}}/
 
   seed:
-    desc: Register demo schemas + ingest the synthetic corpus (server must be running). KENTRO_API_KEY required.
+    desc: Register demo schemas + apply demo ACLs + ingest corpus (server must be running). KENTRO_API_KEY required.
     cmds:
       - uv run kentro-server seed-demo --base-url http://{{.HOST}}:{{.PORT}}
 
-  reset:
-    desc: Wipe local server state (DBs, tenants.json, llm cache)
+  migrate:
+    desc: Run Alembic migrations against every tenant DB under STATE_DIR (idempotent).
+    env:
+      KENTRO_STATE_DIR: '{{.STATE_DIR}}'
     cmds:
+      - 'uv run alembic -c packages/kentro_server/src/kentro_server/alembic.ini upgrade head'
+
+  migrate:revision:
+    desc: Generate a new Alembic revision from current SQLModel metadata. Pass message via -- "summary".
+    env:
+      KENTRO_STATE_DIR: '{{.STATE_DIR}}'
+    cmds:
+      # Autogen needs a real DB to compare metadata against — use one tenant DB if present.
+      # If no tenant DBs exist yet, run `task reset-and-seed` first.
+      - |
+        TENANT_DB=$(ls {{.STATE_DIR}}/*/state.sqlite 2>/dev/null | head -1)
+        if [ -z "$TENANT_DB" ]; then
+          echo "No tenant DB found under {{.STATE_DIR}}. Run 'task reset-and-seed' first."
+          exit 1
+        fi
+        uv run alembic -c packages/kentro_server/src/kentro_server/alembic.ini -x "url=sqlite:///$TENANT_DB" revision --autogenerate -m "{{.CLI_ARGS}}"
+
+  reset-and-seed:
+    desc: Wipe state, start server in background, run migrations + seed (docs + ACLs), leave server running.
+    env:
+      KENTRO_STATE_DIR: '{{.STATE_DIR}}'
+      KENTRO_ALLOW_DEMO_KEYS: 'true'
+    cmds:
+      - task: reset
+      # Background the server, wait for /healthz, then migrate + seed.
+      - |
+        KENTRO_ALLOW_DEMO_KEYS=true KENTRO_STATE_DIR={{.STATE_DIR}} nohup uv run uvicorn kentro_server.main:app --host {{.HOST}} --port {{.PORT}} > .kentro-dev-server.log 2>&1 &
+        echo $! > .kentro-dev-server.pid
+        until curl -fsS http://{{.HOST}}:{{.PORT}}/healthz > /dev/null 2>&1; do sleep 0.5; done
+        echo "server up — pid=$(cat .kentro-dev-server.pid)"
+      # Migrate is idempotent and the server already auto-migrated on first
+      # tenant access, but re-running keeps the workflow uniform.
+      - task: migrate
+      # Seed: schemas + ACLs + corpus, all via the running server's HTTP API.
+      - 'KENTRO_API_KEY=local-ingestion-do-not-share uv run kentro-server seed-demo --base-url http://{{.HOST}}:{{.PORT}}'
+      - 'echo "ready: http://{{.HOST}}:{{.PORT}}/  (server pid: $(cat .kentro-dev-server.pid); kill with task reset-and-seed:stop)"'
+
+  reset-and-seed:stop:
+    desc: Stop the background server started by reset-and-seed.
+    cmds:
+      - |
+        if [ -f .kentro-dev-server.pid ]; then
+          kill "$(cat .kentro-dev-server.pid)" 2>/dev/null || true
+          rm -f .kentro-dev-server.pid
+          echo "server stopped"
+        else
+          echo "no .kentro-dev-server.pid — server may have been started another way"
+        fi
+
+  reset:
+    desc: Wipe local server state (DBs, tenants.json, llm cache, dev-server pid)
+    cmds:
+      - task: reset-and-seed:stop
       - rm -rf {{.STATE_DIR}}
-      - rm -f tenants.json
+      - rm -f tenants.json .kentro-dev-server.pid .kentro-dev-server.log
 
   # ── quality gates ───────────────────────────────────────────────────────────
 

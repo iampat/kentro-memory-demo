@@ -60,6 +60,10 @@ def isolated_state(
     """
     monkeypatch.setenv("KENTRO_STATE_DIR", str(tmp_path / "kentro_state"))
     monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tenants_json_with_admin))
+    # Tests opt into the demo-keys path so /demo/keys returns 200 instead of
+    # 404. The conftest tenants.json doesn't actually contain real demo keys,
+    # so the boot guard never trips — the env var only flips the route's gate.
+    monkeypatch.setenv("KENTRO_ALLOW_DEMO_KEYS", "true")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used-here")
     yield

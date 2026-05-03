@@ -60,12 +60,16 @@ class Settings(BaseSettings):
     kentro_host: str = "127.0.0.1"
     kentro_port: int = 8000
 
-    # --- Production hardening switch ---
-    # When True, the lifespan refuses to boot if `tenants.json` still contains any
-    # default demo key (the public README's "local-*-do-not-share" placeholders).
-    # Off by default so `uv run kentro-server start` works out of the box for the
-    # demo; flip on for any non-localhost deployment.
-    kentro_prod_mode: bool = False
+    # --- Demo-key opt-in (codex 2026-05-03 critical finding fix) ---
+    # The committed `tenants.json` ships with publicly-documented placeholder keys
+    # (e.g. `local-ingestion-do-not-share`). The lifespan refuses to boot when any
+    # of these keys is in tenants.json UNLESS `kentro_allow_demo_keys=True` is set
+    # explicitly — usually via `KENTRO_ALLOW_DEMO_KEYS=true` in the environment.
+    #
+    # The default is `False` (safe) so a misconfigured deployment that forgets the
+    # opt-out fails closed instead of accepting README-known bearer tokens. The
+    # `task dev` Taskfile entry sets `KENTRO_ALLOW_DEMO_KEYS=true` for local dev.
+    kentro_allow_demo_keys: bool = False
 
     @property
     def llm_cache_dir(self) -> Path:

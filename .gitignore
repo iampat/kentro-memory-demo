@@ -38,9 +38,14 @@ out/
 
 # Local data / state
 kentro_state/
+.kentro_state/
 *.sqlite
 *.sqlite3
 *.db
 
 # LLM response cache (commit fixtures explicitly when needed)
 .llm_cache/
+
+# Background dev-server bookkeeping (Taskfile.yaml::reset-and-seed)
+.kentro-dev-server.pid
+.kentro-dev-server.log
