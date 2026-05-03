@@ -10,7 +10,13 @@ from uuid import UUID
 
 import pytest
 from kentro_server.core.conflict import record_field_write
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+    TenantStore,
+)
 from kentro_server.store.models import (
     AgentRow,
     ConflictRow,
@@ -23,7 +29,17 @@ from sqlmodel import col, select
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    config = TenantsConfig(
+        tenants=(
+            TenantConfig(
+                id="demo-1",
+                agents=(
+                    AgentConfig(id="ingestion_agent", api_key="demo-1-ingestion-key"),
+                    AgentConfig(id="manual_sales", api_key="demo-1-manual-key"),
+                ),
+            ),
+        )
+    )
     reg = TenantRegistry(tmp_path / "kentro_state", config)
     s = reg.get("demo-1")
     with s.session() as session:

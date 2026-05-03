@@ -244,6 +244,20 @@ class _FakeOnlineLLM(LLMClient):
     ):
         raise NotImplementedError("not exercised in resolve_test")
 
+    def identify_nl_intents(self, *, text, model=None):
+        raise NotImplementedError("not exercised in resolve_test")
+
+    def parse_nl_rule(
+        self,
+        *,
+        intent_description,
+        intent_kind,
+        registered_schemas,
+        known_agent_ids,
+        model=None,
+    ):
+        raise NotImplementedError("not exercised in resolve_test")
+
 
 def test_skill_resolver_known_when_decision_picks_existing_value() -> None:
     transcript, email = _demo_conflict_candidates()

@@ -6,7 +6,13 @@ import pytest
 from kentro.schema import entity_type_def_from
 from kentro.types import Entity, EntityTypeDef, FieldDef
 from kentro_server.core.schema_registry import SchemaRegistry
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+    TenantStore,
+)
 
 # === SDK introspection ===
 
@@ -24,17 +30,21 @@ class Person(Entity):
     email: str | None = None
 
 
-def test_introspect_required_and_optional_fields() -> None:
+def test_introspect_captures_all_field_names() -> None:
+    """All fields are optional in the wire form (no `required` attribute).
+    The schema-evolution contract treats every field as optional; an entity can
+    exist as a bare row with zero known values."""
     td = entity_type_def_from(Customer)
     if td.name != "Customer":
         raise AssertionError(f"expected name=Customer, got {td.name!r}")
     by_name = {f.name: f for f in td.fields}
     if {"name", "contact", "deal_size", "sales_notes"} != set(by_name):
         raise AssertionError(f"unexpected field set: {set(by_name)}")
-    if not by_name["name"].required:
-        raise AssertionError("name should be required")
-    if by_name["contact"].required:
-        raise AssertionError("contact should be optional")
+    # No `required` attribute exists on FieldDef anymore — by design.
+    if hasattr(by_name["name"], "required"):
+        raise AssertionError("FieldDef.required must not exist; everything is optional")
+    if by_name["name"].deprecated:
+        raise AssertionError("freshly introspected fields must not be deprecated")
 
 
 def test_introspect_renders_optional_type_as_pipe_form() -> None:
@@ -60,7 +70,14 @@ def test_introspect_captures_string_default() -> None:
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    config = TenantsConfig(
+        tenants=(
+            TenantConfig(
+                id="demo-1",
+                agents=(AgentConfig(id="ingestion_agent", api_key="demo-1-key"),),
+            ),
+        )
+    )
     return TenantRegistry(tmp_path / "kentro_state", config).get("demo-1")
 
 
@@ -72,23 +89,119 @@ def test_register_then_list_round_trips(store: TenantStore) -> None:
     reg.register(customer)
     reg.register(person)
 
-    names = reg.names()
-    if set(names) != {"Customer", "Person"}:
-        raise AssertionError(f"unexpected names: {names}")
+    names = set(reg.names())
+    # `Note` is auto-seeded on first list_all() — built-in catch-all type.
+    expected = {"Customer", "Person", "Note"}
+    if not expected.issubset(names):
+        raise AssertionError(f"missing expected names: {expected - names}")
 
     got = reg.get("Customer")
     if got is None or got != customer:
         raise AssertionError(f"round-trip mismatch: {got!r}")
 
 
-def test_register_replaces_existing(store: TenantStore) -> None:
+def test_idempotent_re_register_is_noop(store: TenantStore) -> None:
+    reg = SchemaRegistry(store)
+    customer = entity_type_def_from(Customer)
+    reg.register(customer)
+    # Re-registering the EXACT same definition is a no-op (idempotent).
+    reg.register(customer)
+    got = reg.get("Customer")
+    if got is None or got != customer:
+        raise AssertionError(f"idempotent re-register changed the def: {got!r}")
+
+
+def test_register_rejects_field_removal(store: TenantStore) -> None:
+    """Removing a field is denied — deprecate instead."""
+    from kentro_server.core.schema_registry import SchemaEvolutionError
+
+    reg = SchemaRegistry(store)
+    reg.register(
+        EntityTypeDef(
+            name="Customer",
+            fields=(
+                FieldDef(name="x", type_str="str"),
+                FieldDef(name="y", type_str="int"),
+            ),
+        )
+    )
+    with pytest.raises(SchemaEvolutionError, match="removing fields not allowed"):
+        reg.register(EntityTypeDef(name="Customer", fields=(FieldDef(name="x", type_str="str"),)))
+
+
+def test_register_rejects_type_change(store: TenantStore) -> None:
+    """Changing a field's type is denied — add a new field with the new type."""
+    from kentro_server.core.schema_registry import SchemaEvolutionError
+
+    reg = SchemaRegistry(store)
+    reg.register(EntityTypeDef(name="Customer", fields=(FieldDef(name="age", type_str="int"),)))
+    with pytest.raises(SchemaEvolutionError, match="changing type"):
+        reg.register(
+            EntityTypeDef(name="Customer", fields=(FieldDef(name="age", type_str="str"),))
+        )
+
+
+def test_register_allows_field_addition(store: TenantStore) -> None:
     reg = SchemaRegistry(store)
     reg.register(EntityTypeDef(name="Customer", fields=(FieldDef(name="x", type_str="str"),)))
-    reg.register(EntityTypeDef(name="Customer", fields=(FieldDef(name="y", type_str="int"),)))
-
+    reg.register(
+        EntityTypeDef(
+            name="Customer",
+            fields=(
+                FieldDef(name="x", type_str="str"),
+                FieldDef(name="y", type_str="int"),
+            ),
+        )
+    )
     got = reg.get("Customer")
-    if got is None or len(got.fields) != 1 or got.fields[0].name != "y":
-        raise AssertionError(f"register did not replace, got {got!r}")
+    if got is None or {f.name for f in got.fields} != {"x", "y"}:
+        raise AssertionError(f"new field not added, got {got!r}")
+
+
+def test_register_allows_field_deprecation(store: TenantStore) -> None:
+    reg = SchemaRegistry(store)
+    reg.register(
+        EntityTypeDef(
+            name="Customer",
+            fields=(
+                FieldDef(name="x", type_str="str"),
+                FieldDef(name="y", type_str="int"),
+            ),
+        )
+    )
+    reg.register(
+        EntityTypeDef(
+            name="Customer",
+            fields=(
+                FieldDef(name="x", type_str="str"),
+                FieldDef(name="y", type_str="int", deprecated=True),
+            ),
+        )
+    )
+    got = reg.get("Customer")
+    if got is None:
+        raise AssertionError("Customer disappeared")
+    by_name = {f.name: f for f in got.fields}
+    if not by_name["y"].deprecated:
+        raise AssertionError("y should be deprecated after re-register")
+    if by_name["x"].deprecated:
+        raise AssertionError("x should remain non-deprecated")
+
+
+def test_note_is_auto_seeded(store: TenantStore) -> None:
+    """The built-in catch-all `Note` entity is registered automatically per tenant."""
+    reg = SchemaRegistry(store)
+    if reg.get("Note") is None:
+        raise AssertionError("Note built-in not auto-seeded on first list_all()")
+    note = reg.get("Note")
+    if note is None or {f.name for f in note.fields} != {
+        "subject",
+        "predicate",
+        "object_json",
+        "confidence",
+        "source_label",
+    }:
+        raise AssertionError(f"unexpected Note schema: {note!r}")
 
 
 def test_register_many_persists_across_instances(store: TenantStore) -> None:
@@ -100,8 +213,10 @@ def test_register_many_persists_across_instances(store: TenantStore) -> None:
     )
 
     fresh = SchemaRegistry(store)
-    if set(fresh.names()) != {"Customer", "Person"}:
-        raise AssertionError(f"new SchemaRegistry didn't see persisted rows: {fresh.names()}")
+    names = set(fresh.names())
+    # `Note` is auto-seeded; only check that user-registered ones survived.
+    if not {"Customer", "Person"}.issubset(names):
+        raise AssertionError(f"new SchemaRegistry didn't see persisted rows: {names}")
 
 
 def test_get_returns_none_for_unknown(store: TenantStore) -> None:

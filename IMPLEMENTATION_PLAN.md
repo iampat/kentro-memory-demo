@@ -144,13 +144,33 @@ Tests:
 
 ---
 
-## Step 7 — HTTP API
+## Step 7 — HTTP API + MCP + demo CLI + unstructured memory
 
-**Status:** `pending`
+**Status:** `done`
 
-FastAPI routes 1:1 with the SDK. Per-tenant scoping via API-key header.
+FastAPI routes 1:1 with the SDK + MCP server mounted at `/mcp` + agent-friendly CLI commands + the auto-seeded `Note` entity for unstructured memory.
 
-**What was built:** _pending_
+**What was built:**
+
+Phased delivery on the `step-7-http-api-mcp` branch (all phases in one PR):
+
+- **Phase A — Foundation cleanup.** Per-(tenant, agent) auth model in `tenants.json` (`AgentConfig`, `TenantsConfig` with unique-id and unique-key validation). `TenantRegistry.by_api_key(key)` returns `(TenantStore, agent_id)`. SDK `kentro.types`: `required` field removed, `deprecated: bool` added; `NLIntent` + new `NLResponse` shape. Skills moved into `skills/<name>/SKILL.md` markdown files (non-programmer authorable) with `skill_loader.load_skill_markdown(...)`. Pre-commit hook trimmed (no more types-parity).
+
+- **Phase B — Core orchestrators + schema-evolution.** `core/rules.py` (`apply_ruleset` / `load_active_ruleset`), `core/read.py` (`read_entity`: ACL filter → conflict resolve → build FieldValue), `core/write.py` (`write_field` returning typed `WriteResult`). `core/schema_registry.py` enforces protobuf-style evolution (no rename / no type-change / no removal — only add or deprecate); built-in `Note` entity auto-seeded on first `list_all()`.
+
+- **Refactor (mid-stream).** Inverted the LLM cache layering after Codex flagged stale-cache risk: introduced `Provider` ABC (`skills/provider.py`) with concrete `AnthropicProvider` / `GeminiProvider` / `OfflineProvider`. `CachingProvider` wraps any `Provider` and fingerprints `(model, system, user, response_class, max_tokens, max_retries)` — the rendered system prompt is part of the key, so `SKILL.md` edits invalidate the cache by construction. `LLMClient` ABC stays; new `DefaultLLMClient` composes two `Provider`s + tier model names via constructor DI. `RoutingLLMClient` retired (mixed-tier falls out of composition). `/llm/stats` aggregates via `cache_stats(client)` / `cache_metadata(client)`.
+
+- **Phase C — NL → RuleSet skill chain.** `skills/nl_to_ruleset.py::parse_nl_to_ruleset(...)` runs the two-step LLM parse (`identify_nl_intents` → per-intent `parse_nl_rule`), validates each compiled rule against the live schema and known-agents allowlist, returns `NLResponse` with `parsed_ruleset` + `intents` + `notes` (partial-success contract).
+
+- **Phase D — HTTP routes + Bearer auth.** `api/auth.py` (`Principal`, `current_principal` Depends), `api/deps.py` (cross-cutting deps), `api/dtos.py` (request bodies), and per-domain routers: `documents` (POST ingest, DELETE remove), `entities` (GET read, POST read with explicit ResolverSpec, POST write field), `rules` (POST parse, POST apply, GET active), `schema` (POST register, GET list), `memory` (POST `/memory/remember` shortcut for the catch-all `Note` entity).
+
+- **Phase E — MCP server.** `mcp_server.py` registers nine `kentro_*` tools (`remember`, `read`, `write`, `ingest`, `register_schema`, `apply_rules`, `parse_rules`, `get_rules`, `list_schema`). Mounted at `/mcp` via `app.mount(...)` of `mcp.streamable_http_app()` wrapped in `AuthMiddleware`, an ASGI middleware that resolves the same Bearer key as the HTTP routes and threads the principal through a `ContextVar` to the tool functions. `_LazyMcpMount` constructs a fresh FastMCP per lifespan cycle so the session manager doesn't crash on test re-entry.
+
+- **Phase F — Demo CLI + shared schemas.** Canonical demo entity classes in `kentro_server.demo.schemas` (Customer, Person), shared by `seed-demo`, `smoke-test`, and the existing integration smoke. CLI commands: `seed-demo` (registers schemas + ingests every markdown in `examples/synthetic_corpus/`), `reset-tenant` (wipes a tenant's on-disk state), `smoke-test` (schema → write → read round-trip).
+
+- **Phase G — Tests for D/E/F.** `tests/unit/api_smoke_test.py` (9 tests: auth, schema, write+read, remember, rules apply/parse, document ingest with fake LLM), `tests/unit/mcp_smoke_test.py` (5 tests: tool registration, auth-middleware accept/reject paths, lifespan-scope passthrough), `tests/unit/cli_test.py` (2 tests: seed-demo + smoke-test commands via `CliRunner` with httpx routed through `TestClient`), `tests/unit/nl_to_ruleset_test.py` (6 tests: orchestrator partial-success / schema-validation / agent-allowlist).
+
+**109/109 unit tests pass; ruff lint + format + ty all clean.** Codex's three review findings (critical NL seam, high cache invalidation, medium NLResponse contract) all closed.
 
 ---
 

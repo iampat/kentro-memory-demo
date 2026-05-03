@@ -16,7 +16,13 @@ from kentro_server.skills.llm_client import (
     LLMClient,
     SkillResolverDecision,
 )
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+    TenantStore,
+)
 from kentro_server.store.models import (
     AgentRow,
     ConflictRow,
@@ -47,10 +53,31 @@ class _FakeExtractor(LLMClient):
             return ExtractionResult(entities=())
         return self.queue.pop(0)
 
+    def identify_nl_intents(self, *, text, model=None):
+        raise NotImplementedError("not exercised in ingestor_test")
+
+    def parse_nl_rule(
+        self,
+        *,
+        intent_description,
+        intent_kind,
+        registered_schemas,
+        known_agent_ids,
+        model=None,
+    ):
+        raise NotImplementedError("not exercised in ingestor_test")
+
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    config = TenantsConfig(
+        tenants=(
+            TenantConfig(
+                id="demo-1",
+                agents=(AgentConfig(id="ingestion_agent", api_key="demo-1-key"),),
+            ),
+        )
+    )
     reg = TenantRegistry(tmp_path / "kentro_state", config)
     s = reg.get("demo-1")
     with s.session() as session:
@@ -65,15 +92,15 @@ REGISTERED = [
         name="Customer",
         fields=(
             FieldDef(name="name", type_str="str"),
-            FieldDef(name="deal_size", type_str="float | None", required=False),
+            FieldDef(name="deal_size", type_str="float | None"),
         ),
     ),
     EntityTypeDef(
         name="Person",
         fields=(
             FieldDef(name="name", type_str="str"),
-            FieldDef(name="phone", type_str="str | None", required=False),
-            FieldDef(name="email", type_str="str | None", required=False),
+            FieldDef(name="phone", type_str="str | None"),
+            FieldDef(name="email", type_str="str | None"),
         ),
     ),
 ]

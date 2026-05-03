@@ -14,13 +14,19 @@ from kentro.types import Entity, EntityTypeDef, FieldDef
 
 
 def entity_type_def_from(cls: type[Entity]) -> EntityTypeDef:
-    """Introspect a Pydantic `Entity` subclass into the wire-form definition."""
+    """Introspect a Pydantic `Entity` subclass into the wire-form definition.
+
+    Every field becomes optional in the wire form — Pydantic's `is_required()` is
+    not honored because the schema-evolution contract treats all fields as optional
+    (an entity can exist with zero known values; reads return UNKNOWN for missing
+    fields). The Pydantic class's `required=True` declarations affect what the user
+    is allowed to construct in their own code; they don't affect the server.
+    """
     fields: list[FieldDef] = []
     for name, info in cls.model_fields.items():
         type_str = _format_annotation(info.annotation)
-        required = info.is_required()
         default_json: str | None = None
-        if not required and info.default is not PydanticUndefined:
+        if info.default is not PydanticUndefined:
             try:
                 default_json = json.dumps(info.default)
             except (TypeError, ValueError):
@@ -30,7 +36,6 @@ def entity_type_def_from(cls: type[Entity]) -> EntityTypeDef:
             FieldDef(
                 name=name,
                 type_str=type_str,
-                required=required,
                 default_json=default_json,
             )
         )

@@ -1,56 +1,45 @@
 """LLMClient factory tests — provider routing by model prefix.
 
 These tests do NOT make any network calls. They verify that `make_llm_client`
-selects the right backend class for the configured model names and raises a clear
-`LLMConfigError` when keys are missing.
+selects the right Provider for the configured model names, wraps each in a
+`CachingProvider`, and raises a clear `LLMConfigError` when keys are missing.
+
+Mixed-tier deployments fall out of composition (two different Providers passed
+to `DefaultLLMClient`) — there is no `RoutingLLMClient` class anymore.
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from kentro.types import EntityTypeDef, FieldDef
 from kentro_server.settings import Settings
-from kentro_server.skills.anthropic_client import AnthropicLLMClient
-from kentro_server.skills.cache import CachingLLMClient
+from kentro_server.skills.anthropic_provider import AnthropicProvider
+from kentro_server.skills.cache import CachingProvider
 from kentro_server.skills.factory import (
-    RoutingLLMClient,
+    cache_metadata,
+    cache_stats,
     detect_provider,
     make_llm_client,
 )
-from kentro_server.skills.gemini_client import GeminiLLMClient
+from kentro_server.skills.gemini_provider import GeminiProvider
 from kentro_server.skills.llm_client import (
-    ExtractedEntity,
-    ExtractedField,
-    ExtractionResult,
-    LLMClient,
+    DefaultLLMClient,
     LLMConfigError,
-    SkillResolverDecision,
+    OfflineLLMClient,
 )
 
 
 def _settings(tmp_path: Path, **overrides) -> Settings:
-    """Build a Settings with explicit values, isolated from `.env` and `kentro.toml`.
-
-    `_env_file=None` is documented in pydantic-settings (per-instance override of the
-    env_file source). We also have to drop the TOML source explicitly: ty's strict
-    parameter check doesn't see `_env_file`, so we pass the override through model_validate
-    after the explicit construction.
-    """
+    """Build a Settings with explicit values, isolated from `.env` and `kentro.toml`."""
     base: dict = {
         "anthropic_api_key": "test-anthropic",
         "google_api_key": "test-google",
         "kentro_llm_fast_model": "claude-haiku-4-5",
         "kentro_llm_smart_model": "claude-sonnet-4-6",
-        # Mirrors the production default (`kentro.toml`): cache ON. Routing tests
-        # never invoke the wrapped LLM methods, so no actual I/O happens; if any
-        # future test in this file does invoke them, hits return for free.
+        # Mirrors the production default (`kentro.toml`): cache ON.
         "kentro_llm_cache_enabled": True,
         "kentro_state_dir": tmp_path,
     }
     base.update(overrides)
-    # Construct via init (pydantic-settings sources still apply) then override with
-    # the explicit dict via model_copy so test values always win.
     s = Settings()
     return s.model_copy(update=base)
 
@@ -82,10 +71,19 @@ def test_detect_provider_unknown_prefix_raises() -> None:
 
 def test_make_client_anthropic_only(tmp_path: Path) -> None:
     client = make_llm_client(_settings(tmp_path))
-    if not isinstance(client, CachingLLMClient):
-        raise AssertionError("factory must wrap in CachingLLMClient")
-    if not isinstance(client.inner, AnthropicLLMClient):
-        raise AssertionError(f"inner must be AnthropicLLMClient, got {type(client.inner)}")
+    if not isinstance(client, DefaultLLMClient):
+        raise AssertionError(f"factory must return DefaultLLMClient, got {type(client)}")
+    # Same backend → both tiers point at the same cached provider instance.
+    if client.fast_provider is not client.smart_provider:
+        raise AssertionError(
+            "single-backend deployment should share one CachingProvider across tiers"
+        )
+    if not isinstance(client.fast_provider, CachingProvider):
+        raise AssertionError("provider must be wrapped in CachingProvider")
+    if not isinstance(client.fast_provider.inner, AnthropicProvider):
+        raise AssertionError(
+            f"inner provider must be AnthropicProvider, got {type(client.fast_provider.inner)}"
+        )
 
 
 def test_make_client_gemini_only(tmp_path: Path) -> None:
@@ -95,118 +93,51 @@ def test_make_client_gemini_only(tmp_path: Path) -> None:
         kentro_llm_smart_model="gemini-3.1-pro",
     )
     client = make_llm_client(s)
-    if not isinstance(client, CachingLLMClient):
-        raise AssertionError("factory must wrap in CachingLLMClient")
-    if not isinstance(client.inner, GeminiLLMClient):
-        raise AssertionError(f"inner must be GeminiLLMClient, got {type(client.inner)}")
+    if not isinstance(client, DefaultLLMClient):
+        raise AssertionError(f"factory must return DefaultLLMClient, got {type(client)}")
+    if client.fast_provider is not client.smart_provider:
+        raise AssertionError("single-backend deployment should share one CachingProvider")
+    if not isinstance(client.fast_provider, CachingProvider):
+        raise AssertionError("provider must be wrapped in CachingProvider")
+    if not isinstance(client.fast_provider.inner, GeminiProvider):
+        raise AssertionError(
+            f"inner provider must be GeminiProvider, got {type(client.fast_provider.inner)}"
+        )
 
 
-def test_make_client_mixed_providers_uses_routing(tmp_path: Path) -> None:
+def test_make_client_mixed_providers_uses_two_caches(tmp_path: Path) -> None:
     s = _settings(
         tmp_path,
         kentro_llm_fast_model="claude-haiku-4-5",
         kentro_llm_smart_model="gemini-3.1-pro",
     )
     client = make_llm_client(s)
-    if not isinstance(client.inner, RoutingLLMClient):  # type: ignore[attr-defined]
-        raise AssertionError(
-            f"mixed providers must use RoutingLLMClient, got {type(client.inner)}"
-        )
-    if not isinstance(client.inner.fast, AnthropicLLMClient):  # type: ignore[attr-defined]
-        raise AssertionError("fast tier must be Anthropic")
-    if not isinstance(client.inner.smart, GeminiLLMClient):  # type: ignore[attr-defined]
-        raise AssertionError("smart tier must be Gemini")
-
-
-# === RoutingLLMClient actually dispatches ===
-
-
-@dataclass
-class _RecordingFakeLLM(LLMClient):
-    """Records the kwargs it received so tests can verify forwarding."""
-
-    name: str = "fake"
-    fast_model: str = "claude-fake-fast"
-    smart_model: str = "gemini-fake-smart"
-    skill_calls: list = field(default_factory=list)
-    extract_calls: list = field(default_factory=list)
-
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
-        self.skill_calls.append({"prompt": prompt, "candidates": candidates, "model": model})
-        return SkillResolverDecision(chosen_value_json=None, reason=f"{self.name} declined")
-
-    def extract_entities(
-        self, *, document_text, registered_schemas, document_label=None, model=None
+    if client.fast_provider is client.smart_provider:
+        raise AssertionError("mixed-backend deployment must use two distinct providers")
+    if not isinstance(client.fast_provider, CachingProvider) or not isinstance(
+        client.smart_provider, CachingProvider
     ):
-        self.extract_calls.append(
-            {
-                "document_text": document_text,
-                "registered_schemas": registered_schemas,
-                "document_label": document_label,
-                "model": model,
-            }
+        raise AssertionError("both tiers must be wrapped in CachingProvider")
+    if not isinstance(client.fast_provider.inner, AnthropicProvider):
+        raise AssertionError("fast tier inner must be Anthropic")
+    if not isinstance(client.smart_provider.inner, GeminiProvider):
+        raise AssertionError("smart tier inner must be Gemini")
+
+
+def test_make_client_records_tier_model_names(tmp_path: Path) -> None:
+    """`DefaultLLMClient` exposes `fast_model` / `smart_model` so callers (the cache
+    key would no longer rely on these — they're surfaced for debugging / `/llm/stats`)."""
+    client = make_llm_client(
+        _settings(
+            tmp_path,
+            kentro_llm_fast_model="claude-haiku-4-5",
+            kentro_llm_smart_model="claude-sonnet-4-6",
         )
-        return ExtractionResult(
-            entities=(
-                ExtractedEntity(
-                    entity_type="Customer",
-                    key="X",
-                    fields=(ExtractedField(field_name="name", value_json='"X"'),),
-                ),
-            ),
-        )
-
-
-def test_routing_client_forwards_skill_resolver_to_fast() -> None:
-    fast = _RecordingFakeLLM(name="fast", fast_model="claude-haiku-4-5")
-    smart = _RecordingFakeLLM(name="smart", smart_model="gemini-3.1-pro")
-    router = RoutingLLMClient(fast=fast, smart=smart)
-
-    router.run_skill_resolver(prompt="P", candidates=[], model=None)
-    if len(fast.skill_calls) != 1 or smart.skill_calls:
-        raise AssertionError("skill resolver must dispatch to FAST tier only")
-
-
-def test_routing_client_forwards_extract_to_smart_with_correct_kwargs() -> None:
-    """Regression: previously _RoutingLLMClient.extract_entities used the wrong kwarg
-    name (`registered_entity_types`) and crashed with TypeError on every ingest in
-    mixed-provider mode. This test would have caught it."""
-    fast = _RecordingFakeLLM(name="fast")
-    smart = _RecordingFakeLLM(name="smart", smart_model="gemini-3.1-pro")
-    router = RoutingLLMClient(fast=fast, smart=smart)
-    schemas = [EntityTypeDef(name="Customer", fields=(FieldDef(name="name", type_str="str"),))]
-
-    result = router.extract_entities(
-        document_text="hello",
-        registered_schemas=schemas,
-        document_label="doc.md",
-        model="gemini-3.1-pro",
     )
-
-    if not result.entities:
-        raise AssertionError("extract should return entities from the smart fake")
-    if len(smart.extract_calls) != 1 or fast.extract_calls:
-        raise AssertionError("extract must dispatch to SMART tier only")
-    forwarded = smart.extract_calls[0]
-    if forwarded["registered_schemas"] is not schemas:
-        raise AssertionError(
-            f"schemas must be forwarded by reference, got {forwarded['registered_schemas']!r}"
-        )
-    if forwarded["model"] != "gemini-3.1-pro":
-        raise AssertionError(f"model not forwarded, got {forwarded['model']!r}")
-
-
-def test_routing_client_exposes_inner_model_names_for_caching() -> None:
-    """RoutingLLMClient must expose `fast_model` / `smart_model` so the cache
-    wrapper can build a stable cache key without falling back to '<unknown>'."""
-    fast = _RecordingFakeLLM(name="fast", fast_model="claude-haiku-4-5")
-    smart = _RecordingFakeLLM(name="smart", smart_model="gemini-3.1-pro")
-    router = RoutingLLMClient(fast=fast, smart=smart)
-
-    if router.fast_model != "claude-haiku-4-5":
-        raise AssertionError(f"fast_model not surfaced: {router.fast_model!r}")
-    if router.smart_model != "gemini-3.1-pro":
-        raise AssertionError(f"smart_model not surfaced: {router.smart_model!r}")
+    if client.fast_model != "claude-haiku-4-5":
+        raise AssertionError(f"fast_model not surfaced: {client.fast_model!r}")
+    if client.smart_model != "claude-sonnet-4-6":
+        raise AssertionError(f"smart_model not surfaced: {client.smart_model!r}")
 
 
 # === Misconfiguration ===
@@ -244,18 +175,70 @@ def test_mixed_providers_with_one_missing_key_raises(tmp_path: Path) -> None:
 
 
 def test_cache_can_be_disabled(tmp_path: Path) -> None:
-    """The factory's CachingLLMClient honors `kentro_llm_cache_enabled=False`."""
+    """The factory's `CachingProvider`s honor `kentro_llm_cache_enabled=False`."""
     client = make_llm_client(_settings(tmp_path, kentro_llm_cache_enabled=False))
-    if not isinstance(client, CachingLLMClient):
-        raise AssertionError("client must still be the cache wrapper")
-    if client.enabled:
+    if not isinstance(client.fast_provider, CachingProvider):
+        raise AssertionError("provider must still be wrapped in CachingProvider")
+    if client.fast_provider.enabled:
         raise AssertionError("cache must be disabled when KENTRO_LLM_CACHE_ENABLED=False")
 
 
 def test_cache_can_be_enabled(tmp_path: Path) -> None:
-    """The factory's CachingLLMClient honors `kentro_llm_cache_enabled=True`."""
+    """The factory's `CachingProvider`s honor `kentro_llm_cache_enabled=True`."""
     client = make_llm_client(_settings(tmp_path, kentro_llm_cache_enabled=True))
-    if not isinstance(client, CachingLLMClient):
-        raise AssertionError("client must still be the cache wrapper")
-    if not client.enabled:
+    if not isinstance(client.fast_provider, CachingProvider):
+        raise AssertionError("provider must be wrapped in CachingProvider")
+    if not client.fast_provider.enabled:
         raise AssertionError("cache must be enabled when KENTRO_LLM_CACHE_ENABLED=True")
+
+
+# === cache_stats / cache_metadata aggregator helpers ===
+
+
+def test_cache_stats_returns_none_for_offline_client() -> None:
+    """The aggregator helpers handle non-DefaultLLMClient inputs gracefully."""
+    if cache_stats(OfflineLLMClient()) is not None:
+        raise AssertionError("cache_stats must return None for OfflineLLMClient")
+    if cache_metadata(OfflineLLMClient()) is not None:
+        raise AssertionError("cache_metadata must return None for OfflineLLMClient")
+
+
+def test_cache_stats_aggregates_single_backend(tmp_path: Path) -> None:
+    """When fast and smart share one CachingProvider, stats are reported once."""
+    client = make_llm_client(_settings(tmp_path))
+    # Forge some hits/misses on the shared provider directly, then aggregate.
+    cp = client.fast_provider
+    if not isinstance(cp, CachingProvider):
+        raise AssertionError("fast provider should be CachingProvider")
+    cp.stats.hits = 7
+    cp.stats.inner_calls = 3
+    aggregated = cache_stats(client)
+    if aggregated is None:
+        raise AssertionError("aggregator must find the cache")
+    if aggregated.hits != 7 or aggregated.inner_calls != 3:
+        raise AssertionError(
+            f"single-backend stats must NOT be double-counted, got {aggregated.render()}"
+        )
+
+
+def test_cache_stats_aggregates_mixed_backend(tmp_path: Path) -> None:
+    """Mixed-backend → two CachingProviders → counters add up."""
+    client = make_llm_client(
+        _settings(
+            tmp_path,
+            kentro_llm_fast_model="claude-haiku-4-5",
+            kentro_llm_smart_model="gemini-3.1-pro",
+        )
+    )
+    fast_cp, smart_cp = client.fast_provider, client.smart_provider
+    if not isinstance(fast_cp, CachingProvider) or not isinstance(smart_cp, CachingProvider):
+        raise AssertionError("both tiers must be CachingProvider")
+    fast_cp.stats.hits, fast_cp.stats.inner_calls = 4, 1
+    smart_cp.stats.hits, smart_cp.stats.inner_calls = 2, 6
+    aggregated = cache_stats(client)
+    if aggregated is None:
+        raise AssertionError("aggregator must find caches")
+    if aggregated.hits != 6 or aggregated.inner_calls != 7:
+        raise AssertionError(
+            f"mixed-backend stats must sum across providers, got {aggregated.render()}"
+        )

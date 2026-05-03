@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     kentro_host: str = "127.0.0.1"
     kentro_port: int = 8000
 
+    # --- Production hardening switch ---
+    # When True, the lifespan refuses to boot if `tenants.json` still contains any
+    # default demo key (the public README's "local-*-do-not-share" placeholders).
+    # Off by default so `uv run kentro-server start` works out of the box for the
+    # demo; flip on for any non-localhost deployment.
+    kentro_prod_mode: bool = False
+
     @property
     def llm_cache_dir(self) -> Path:
         return self.kentro_state_dir / ".llm_cache"

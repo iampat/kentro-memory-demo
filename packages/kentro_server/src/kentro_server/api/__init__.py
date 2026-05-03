@@ -1,1 +1,26 @@
-"""kentro-server API surface — FastAPI routes and the request/response types they speak."""
+"""HTTP API surface — auth, request DTOs, and the per-domain routers.
+
+Wire-form response types live in `kentro.types` (the SDK's source of truth).
+The server imports them directly — there is no parallel mirror. If a server-side
+type ever needs to diverge (e.g. MCP-facing string statuses), introduce a
+server-only subclass at that point; do not pre-emptively duplicate.
+
+Routers are mounted into the FastAPI app from `kentro_server.main` via
+`app.include_router(...)`.
+"""
+
+from kentro_server.api.routes import (
+    documents_router,
+    entities_router,
+    memory_router,
+    rules_router,
+    schema_router,
+)
+
+__all__ = [
+    "documents_router",
+    "entities_router",
+    "memory_router",
+    "rules_router",
+    "schema_router",
+]

@@ -1,12 +1,20 @@
-"""CachingLLMClient — disk-backed structured-output cache.
+"""CachingProvider — disk-backed structured-output cache, sitting under the prompt layer.
 
-Wraps any inner `LLMClient`. Per-call key is `sha256` of a canonical JSON of:
-- the model name actually used,
-- the structured-output response model class qualname,
-- the system + user payload.
+Wraps any inner `Provider`. The cache key is `sha256` of a canonical JSON of:
+- the model name,
+- the response Pydantic class qualname,
+- the system prompt (rendered, including any skill markdown),
+- the user payload (rendered),
+- the structural knobs `max_tokens` and `max_retries`.
+
+Because this layer sits **under** prompt-building (`DefaultLLMClient` formats
+the prompt then calls `Provider.complete(...)`), the cache key naturally
+includes everything sent to the LLM. Editing a `SKILL.md` changes the system
+prompt → changes the key → forces a fresh inner call. There is no separate
+"method → skill file" lookup, and no hidden input the cache could miss.
 
 Cache files live at `<cache_dir>/<sha256>.json`, content `{"response": {...}}`.
-The cache is content-addressed; collisions across tenants only happen if inputs
+The cache is content-addressed; cross-tenant collisions only happen if inputs
 are byte-identical, which by construction means the same answer.
 
 Per-process counters track `hits` and `inner_calls`; `hit_rate = hits / total`.
@@ -18,18 +26,15 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TypeVar
 
-from kentro_server.skills.llm_client import (
-    ExtractionResult,
-    LLMClient,
-    SkillResolverDecision,
-)
+from pydantic import BaseModel
 
-if TYPE_CHECKING:
-    from kentro_server.store.models import FieldWriteRow
+from kentro_server.skills.provider import Provider
 
 logger = logging.getLogger(__name__)
+
+_TModel = TypeVar("_TModel", bound=BaseModel)
 
 
 @dataclass
@@ -49,17 +54,18 @@ class CacheStats:
         return f"hits={self.hits} inner_calls={self.inner_calls} hit_rate={self.hit_rate:.1%}"
 
 
-class CachingLLMClient(LLMClient):
-    """Disk cache wrapper. Provider-agnostic.
+class CachingProvider(Provider):
+    """Disk cache wrapper around any `Provider`.
 
     Construct via `make_llm_client(settings)` rather than directly so caching is
-    consistently configured across the process.
+    consistently configured across the process. Tests construct directly with a
+    fake `Provider` to exercise the cache surface.
     """
 
     def __init__(
         self,
         *,
-        inner: LLMClient,
+        inner: Provider,
         cache_dir: Path,
         enabled: bool = True,
     ) -> None:
@@ -69,97 +75,63 @@ class CachingLLMClient(LLMClient):
         self.stats = CacheStats()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- High-level skills ---
-
-    def run_skill_resolver(
+    def complete(
         self,
         *,
-        prompt: str,
-        candidates: "list[FieldWriteRow]",
-        model: str | None = None,
-    ) -> SkillResolverDecision:
-        # Resolve the actual model used so cache keys are stable across env changes.
-        actual_model = model or _peek_attr(self.inner, "fast_model")
+        model: str,
+        system: str,
+        user: str,
+        response_model: type[_TModel],
+        max_tokens: int = 4096,
+        max_retries: int = 3,
+    ) -> _TModel:
         cache_key = self._fingerprint(
-            method="run_skill_resolver",
-            model=actual_model,
-            response_class="SkillResolverDecision",
-            payload={
-                "prompt": prompt,
-                "candidates": [
-                    {
-                        "value_json": c.value_json,
-                        "agent_id": c.written_by_agent_id,
-                        "written_at": c.written_at.isoformat(),
-                        "source_document_id": str(c.source_document_id)
-                        if c.source_document_id
-                        else None,
-                    }
-                    for c in candidates
-                ],
-            },
-        )
-        cached = self._read(cache_key, SkillResolverDecision)
-        if cached is not None:
-            self.stats.hits += 1
-            self._log_event("hit", cache_key, actual_model)
-            return cached
-        result = self.inner.run_skill_resolver(prompt=prompt, candidates=candidates, model=model)
-        self.stats.inner_calls += 1
-        self._log_event("miss", cache_key, actual_model)
-        self._write(cache_key, result)
-        return result
-
-    def extract_entities(
-        self,
-        *,
-        document_text: str,
-        registered_schemas: list,
-        document_label: str | None = None,
-        model: str | None = None,
-    ) -> ExtractionResult:
-        actual_model = model or _peek_attr(self.inner, "smart_model")
-        # Fingerprint the full schemas, not just names — different field declarations
-        # produce different extractor prompts and so different responses.
-        schema_payload = [
-            td.model_dump(mode="json") if hasattr(td, "model_dump") else td
-            for td in registered_schemas
-        ]
-        cache_key = self._fingerprint(
-            method="extract_entities",
-            model=actual_model,
-            response_class="ExtractionResult",
-            payload={
-                "document_text": document_text,
-                "registered_schemas": schema_payload,
-                "document_label": document_label,
-            },
-        )
-        cached = self._read(cache_key, ExtractionResult)
-        if cached is not None:
-            self.stats.hits += 1
-            self._log_event("hit", cache_key, actual_model)
-            return cached
-        result = self.inner.extract_entities(
-            document_text=document_text,
-            registered_schemas=registered_schemas,
-            document_label=document_label,
             model=model,
+            system=system,
+            user=user,
+            response_class=response_model.__name__,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+        )
+        cached = self._read(cache_key, response_model)
+        if cached is not None:
+            self.stats.hits += 1
+            self._log_event("hit", cache_key, model)
+            return cached
+        result = self.inner.complete(
+            model=model,
+            system=system,
+            user=user,
+            response_model=response_model,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
         )
         self.stats.inner_calls += 1
-        self._log_event("miss", cache_key, actual_model)
+        self._log_event("miss", cache_key, model)
         self._write(cache_key, result)
         return result
 
     # --- Cache I/O ---
 
-    def _fingerprint(self, *, method: str, model: str, response_class: str, payload: dict) -> str:
+    def _fingerprint(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        response_class: str,
+        max_tokens: int,
+        max_retries: int,
+    ) -> str:
         canonical = json.dumps(
             {
-                "method": method,
+                "method": "complete",
                 "model": model,
                 "response_class": response_class,
-                "payload": payload,
+                "system": system,
+                "user": user,
+                "max_tokens": max_tokens,
+                "max_retries": max_retries,
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -169,7 +141,7 @@ class CachingLLMClient(LLMClient):
     def _path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.json"
 
-    def _read(self, key: str, model_cls):
+    def _read(self, key: str, model_cls: type[_TModel]) -> _TModel | None:
         if not self.enabled:
             return None
         path = self._path(key)
@@ -182,7 +154,7 @@ class CachingLLMClient(LLMClient):
             return None
         return model_cls.model_validate(data["response"])
 
-    def _write(self, key: str, response) -> None:
+    def _write(self, key: str, response: BaseModel) -> None:
         if not self.enabled:
             return
         path = self._path(key)
@@ -201,9 +173,4 @@ class CachingLLMClient(LLMClient):
         )
 
 
-def _peek_attr(obj: object, name: str) -> str:
-    """Try to read an attribute (used to resolve the inner client's tier model name)."""
-    return str(getattr(obj, name, "<unknown>"))
-
-
-__all__ = ["CacheStats", "CachingLLMClient"]
+__all__ = ["CacheStats", "CachingProvider"]
