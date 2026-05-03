@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# kentro pre-commit hook — runs ruff (lint + format), ty, and the unit test suite.
+#
+# Install (one-time, per clone):
+#     git config --local core.hooksPath scripts/git-hooks
+#
+# Bypass for emergencies:
+#     git commit --no-verify
+# (avoid this — fix the failure instead)
+#
+# This hook deliberately runs against the full project, not only staged files.
+# Ruff and the test suite are fast enough (~5s combined) that staged-only checks
+# would mostly add complexity without saving time.
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Helper: run a step and stop on failure.
+run() {
+    local label=$1
+    shift
+    printf "[pre-commit] %s ... " "$label"
+    if "$@" >/tmp/kentro-precommit.log 2>&1; then
+        printf "ok\n"
+    else
+        printf "FAIL\n"
+        echo "---- output ----"
+        cat /tmp/kentro-precommit.log
+        echo "----------------"
+        echo "[pre-commit] '$label' failed. Fix the issue (or pass --no-verify if you really must)."
+        exit 1
+    fi
+}
+
+# Run the types-parity check FIRST and as its own step so any drift between
+# `kentro.types` and `kentro_server.api.types` shows the diff loudly without
+# being buried inside a 50-test pytest output.
+run "types parity (kentro <-> kentro_server)" \
+    uv run pytest tests/unit/types_parity_test.py -v --tb=short
+
+run "ruff lint"   uv run ruff check .
+run "ruff format" uv run ruff format --check .
+run "ty check"    uv run ty check
+run "pytest"      uv run pytest tests/unit/ -q
+
+echo "[pre-commit] all checks green."

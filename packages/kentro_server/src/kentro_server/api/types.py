@@ -12,8 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # === Status enums ===
+
 
 class FieldStatus(StrEnum):
     """Status of a field read. SDK consumers MUST handle all four."""
@@ -35,6 +35,7 @@ class WriteStatus(StrEnum):
 
 
 # === Resolver specs (declarative — actual resolver behavior lives in resolvers.py) ===
+
 
 class RawResolverSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -75,6 +76,7 @@ ResolverSpec = Annotated[
 
 
 # === Rules (discriminated union — narrow with isinstance) ===
+
 
 class FieldReadRule(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -126,6 +128,7 @@ class RuleSet(BaseModel):
 
 # === Lineage ===
 
+
 class LineageRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
     source_document_id: UUID | None = None
@@ -136,6 +139,7 @@ class LineageRecord(BaseModel):
 
 
 # === Field value carriers (read-time) ===
+
 
 class FieldValueCandidate(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -166,6 +170,7 @@ class Conflict(BaseModel):
 
 # === Records ===
 
+
 class EntityRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
     entity_type: str
@@ -180,6 +185,7 @@ class Agent(BaseModel):
 
 
 # === Operation results ===
+
 
 class WriteResult(BaseModel):
     model_config = ConfigDict(frozen=True)

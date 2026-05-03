@@ -20,6 +20,9 @@ build/
 .env
 .env.local
 .env.*.local
+# Editor backups (these can leak secrets if a .env is open in the editor)
+*~
+.*~
 
 # Editor / OS
 .DS_Store

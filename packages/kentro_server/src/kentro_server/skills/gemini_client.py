@@ -8,18 +8,18 @@ even without a working call path.
 
 import json
 import logging
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 import instructor
 from google import genai
 from pydantic import BaseModel
 
+from kentro_server.skills.anthropic_client import _EXTRACT_SYSTEM, _SKILL_SYSTEM
 from kentro_server.skills.llm_client import (
     ExtractionResult,
     LLMClient,
     SkillResolverDecision,
 )
-from kentro_server.skills.anthropic_client import _EXTRACT_SYSTEM, _SKILL_SYSTEM
 
 if TYPE_CHECKING:
     from kentro_server.store.models import FieldWriteRow
@@ -90,26 +90,36 @@ class GeminiLLMClient(LLMClient):
         response_model: type[_TModel],
     ) -> _TModel:
         logger.debug("gemini.complete model=%s response_model=%s", model, response_model.__name__)
-        return self._client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_model=response_model,
-            max_retries=self.max_retries,
+        # instructor.from_genai's `chat.completions.create` returns the validated
+        # `response_model` instance at runtime when the underlying client is sync
+        # (which `genai.Client(api_key=...)` is). ty's stubs incorrectly type it as
+        # a coroutine because instructor uses sync/async overloads, so we cast.
+        result = cast(
+            _TModel,
+            self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_model=response_model,
+                max_retries=self.max_retries,
+            ),
         )
+        return result
 
 
 def _format_skill_user(policy: str, candidates: "list[FieldWriteRow]") -> str:
     rendered_candidates = []
     for c in candidates:
-        rendered_candidates.append({
-            "agent_id": c.written_by_agent_id,
-            "written_at": c.written_at.isoformat(),
-            "source_document_id": str(c.source_document_id) if c.source_document_id else None,
-            "value_json": c.value_json,
-        })
+        rendered_candidates.append(
+            {
+                "agent_id": c.written_by_agent_id,
+                "written_at": c.written_at.isoformat(),
+                "source_document_id": str(c.source_document_id) if c.source_document_id else None,
+                "value_json": c.value_json,
+            }
+        )
     return f"POLICY:\n{policy}\n\nCANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
 
 
@@ -123,14 +133,13 @@ def _format_extract_user(
         chunks.append(f"- {td.name}:")
         for f in td.fields:
             req = "required" if f.required else "optional"
-            default = f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
+            default = (
+                f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
+            )
             chunks.append(f"    * {f.name}: {f.type_str} ({req}){default}")
     schema_block = "\n".join(chunks)
     header = f"DOCUMENT LABEL: {document_label}\n" if document_label else ""
-    return (
-        f"REGISTERED SCHEMA:\n{schema_block}\n\n"
-        f"{header}DOCUMENT:\n{document_text}"
-    )
+    return f"REGISTERED SCHEMA:\n{schema_block}\n\n{header}DOCUMENT:\n{document_text}"
 
 
 __all__ = ["GeminiLLMClient"]

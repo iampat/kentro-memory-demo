@@ -8,7 +8,7 @@ to the server. The server stores the definition and the ingestor uses the names.
 import json
 from typing import Any
 
-from pydantic_core import PydanticUndefined
+from pydantic.fields import PydanticUndefined
 
 from kentro.types import Entity, EntityTypeDef, FieldDef
 
@@ -26,12 +26,14 @@ def entity_type_def_from(cls: type[Entity]) -> EntityTypeDef:
             except (TypeError, ValueError):
                 # Non-JSON-serializable default — drop it; server can't reconstruct anyway.
                 default_json = None
-        fields.append(FieldDef(
-            name=name,
-            type_str=type_str,
-            required=required,
-            default_json=default_json,
-        ))
+        fields.append(
+            FieldDef(
+                name=name,
+                type_str=type_str,
+                required=required,
+                default_json=default_json,
+            )
+        )
     return EntityTypeDef(name=cls.__name__, fields=tuple(fields))
 
 

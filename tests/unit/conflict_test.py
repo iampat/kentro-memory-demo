@@ -4,13 +4,11 @@ These tests use a real SQLModel session via the per-tenant store, since the func
 flushes to detect existing live writes inside the same transaction.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
-from sqlmodel import col, select
-
 from kentro_server.core.conflict import record_field_write
 from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
 from kentro_server.store.models import (
@@ -20,6 +18,7 @@ from kentro_server.store.models import (
     FieldWriteRow,
     RuleVersionRow,
 )
+from sqlmodel import col, select
 
 
 @pytest.fixture
@@ -46,13 +45,15 @@ def _make_entity(store: TenantStore, type_: str = "Customer", key: str = "Acme")
 
 def _open_conflicts(store: TenantStore, entity_id: UUID, field_name: str) -> list[ConflictRow]:
     with store.session() as session:
-        return list(session.exec(
-            select(ConflictRow).where(
-                ConflictRow.entity_id == entity_id,
-                ConflictRow.field_name == field_name,
-                col(ConflictRow.resolved_at).is_(None),
-            )
-        ).all())
+        return list(
+            session.exec(
+                select(ConflictRow).where(
+                    ConflictRow.entity_id == entity_id,
+                    ConflictRow.field_name == field_name,
+                    col(ConflictRow.resolved_at).is_(None),
+                )
+            ).all()
+        )
 
 
 def test_single_write_creates_no_conflict(store: TenantStore) -> None:
@@ -79,12 +80,20 @@ def test_two_writes_same_value_corroboration_no_conflict(store: TenantStore) -> 
     entity_id = _make_entity(store)
     with store.session() as session:
         record_field_write(
-            session, entity_id=entity_id, field_name="name", value_json='"Acme"',
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="name",
+            value_json='"Acme"',
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         _, conflict = record_field_write(
-            session, entity_id=entity_id, field_name="name", value_json='"Acme"',
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="name",
+            value_json='"Acme"',
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         session.commit()
         if conflict is not None:
@@ -97,12 +106,20 @@ def test_two_writes_different_values_create_one_conflict(store: TenantStore) -> 
     entity_id = _make_entity(store)
     with store.session() as session:
         _, c1 = record_field_write(
-            session, entity_id=entity_id, field_name="deal_size", value_json="250000",
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="deal_size",
+            value_json="250000",
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         _, c2 = record_field_write(
-            session, entity_id=entity_id, field_name="deal_size", value_json="300000",
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="deal_size",
+            value_json="300000",
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         session.commit()
     if c1 is not None:
@@ -146,28 +163,46 @@ def test_two_writes_different_fields_no_conflict(store: TenantStore) -> None:
     entity_id = _make_entity(store, type_="Person", key="Ali")
     with store.session() as session:
         _, c1 = record_field_write(
-            session, entity_id=entity_id, field_name="phone", value_json='"778-968-1361"',
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="phone",
+            value_json='"778-968-1361"',
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         _, c2 = record_field_write(
-            session, entity_id=entity_id, field_name="email", value_json='"ali@kentro.ai"',
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="email",
+            value_json='"ali@kentro.ai"',
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         session.commit()
     if c1 is not None or c2 is not None:
         raise AssertionError("writes on different fields must not create conflicts")
 
 
-def test_resolved_conflict_then_new_disagreement_creates_fresh_conflict(store: TenantStore) -> None:
+def test_resolved_conflict_then_new_disagreement_creates_fresh_conflict(
+    store: TenantStore,
+) -> None:
     entity_id = _make_entity(store)
     with store.session() as session:
         record_field_write(
-            session, entity_id=entity_id, field_name="deal_size", value_json="250000",
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="deal_size",
+            value_json="250000",
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         _, c2 = record_field_write(
-            session, entity_id=entity_id, field_name="deal_size", value_json="300000",
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="deal_size",
+            value_json="300000",
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         if c2 is None:
             raise AssertionError("expected a conflict row after the second disagreeing write")
@@ -179,18 +214,24 @@ def test_resolved_conflict_then_new_disagreement_creates_fresh_conflict(store: T
         first = session.get(ConflictRow, c2_id)
         if first is None:
             raise AssertionError("conflict row missing")
-        first.resolved_at = datetime.now(timezone.utc)
+        first.resolved_at = datetime.now(UTC)
         session.add(first)
         session.commit()
 
     # Now a new disagreeing write should create a NEW open ConflictRow, not touch the resolved one.
     with store.session() as session:
         _, c3 = record_field_write(
-            session, entity_id=entity_id, field_name="deal_size", value_json="350000",
-            written_by_agent_id="ingestion_agent", rule_version_at_write=1,
+            session,
+            entity_id=entity_id,
+            field_name="deal_size",
+            value_json="350000",
+            written_by_agent_id="ingestion_agent",
+            rule_version_at_write=1,
         )
         if c3 is None:
-            raise AssertionError("disagreement after a resolved conflict must open a fresh ConflictRow")
+            raise AssertionError(
+                "disagreement after a resolved conflict must open a fresh ConflictRow"
+            )
         c3_id = c3.id
         session.commit()
     if c3_id == c2_id:
@@ -212,15 +253,15 @@ def test_write_persists_full_lineage_fields(store: TenantStore) -> None:
         session.commit()
         write_id = write.id
     with store.session() as session:
-        rows = list(session.exec(
-            select(FieldWriteRow).where(FieldWriteRow.id == write_id)
-        ).all())
+        rows = list(session.exec(select(FieldWriteRow).where(FieldWriteRow.id == write_id)).all())
         if len(rows) != 1:
             raise AssertionError("write not persisted")
         row = rows[0]
         if row.confidence != 0.9:
             raise AssertionError(f"confidence not persisted, got {row.confidence}")
         if row.rule_version_at_write != 1:
-            raise AssertionError(f"rule_version_at_write not persisted, got {row.rule_version_at_write}")
+            raise AssertionError(
+                f"rule_version_at_write not persisted, got {row.rule_version_at_write}"
+            )
         if row.superseded:
             raise AssertionError("new writes must not be marked superseded")

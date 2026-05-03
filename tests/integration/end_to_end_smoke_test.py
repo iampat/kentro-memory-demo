@@ -24,25 +24,22 @@ under `<state_dir>/.llm_cache/` so subsequent runs are free.
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlmodel import select
-
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     AutoResolverSpec,
     ConflictRule,
     Entity,
     FieldStatus,
-    RawResolverSpec,
     RuleSet,
     SkillResolverSpec,
 )
 from kentro_server.core.acl import evaluate_field_read
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
+from kentro_server.core.source_removal import remove_document
 from kentro_server.extraction import ingest_document
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import make_llm_client
@@ -55,19 +52,23 @@ from kentro_server.store.models import (
     FieldWriteRow,
     RuleVersionRow,
 )
+from sqlmodel import col, select
 
 logger = logging.getLogger(__name__)
 
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY") and not Path(".env").exists(),
-    reason="end-to-end smoke needs ANTHROPIC_API_KEY (set in env or .env)",
-)
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOTENV = _REPO_ROOT / ".env"
+CORPUS_DIR = _REPO_ROOT / "examples" / "synthetic_corpus"
 
-CORPUS_DIR = Path(__file__).resolve().parent.parent.parent / "examples" / "synthetic_corpus"
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY") and not _DOTENV.exists(),
+    reason="end-to-end smoke needs ANTHROPIC_API_KEY (set in env or repo-root .env)",
+)
 
 
 # === Demo schemas ===
+
 
 class Customer(Entity):
     name: str
@@ -85,14 +86,17 @@ class Person(Entity):
 
 # === Helpers ===
 
+
 def _settings_for_test(tmp_path: Path) -> Settings:
     """Construct settings pointing at an isolated state dir, but keep the global
     .llm_cache so re-runs hit it. Uses the user's real keys from .env."""
     real = Settings()
-    return real.model_copy(update={
-        "kentro_state_dir": tmp_path / "kentro_state",
-        "kentro_tenants_json": tmp_path / "tenants.json",
-    })
+    return real.model_copy(
+        update={
+            "kentro_state_dir": tmp_path / "kentro_state",
+            "kentro_tenants_json": tmp_path / "tenants.json",
+        }
+    )
 
 
 def _new_world(tmp_path: Path):
@@ -120,7 +124,9 @@ def _new_world(tmp_path: Path):
 def _ingest_corpus_doc(store, schema, llm, settings, filename: str):
     path = CORPUS_DIR / filename
     if not path.exists():
-        pytest.skip(f"corpus file missing: {path} — run `uv run python scripts/generate_corpus.py`")
+        pytest.skip(
+            f"corpus file missing: {path} — run `uv run python scripts/generate_corpus.py`"
+        )
     return ingest_document(
         store=store,
         llm=llm,
@@ -140,12 +146,16 @@ def _live_writes_for(store, *, entity_type: str, key: str, field_name: str) -> l
         ).first()
         if ent is None:
             return []
-        return list(s.exec(
-            select(FieldWriteRow).where(
-                FieldWriteRow.entity_id == ent.id,
-                FieldWriteRow.field_name == field_name,
-            ).order_by(FieldWriteRow.written_at)
-        ).all())
+        return list(
+            s.exec(
+                select(FieldWriteRow)
+                .where(
+                    FieldWriteRow.entity_id == ent.id,
+                    FieldWriteRow.field_name == field_name,
+                )
+                .order_by(col(FieldWriteRow.written_at))
+            ).all()
+        )
 
 
 def _open_conflicts_for(store, *, entity_type: str, key: str, field_name: str):
@@ -155,16 +165,19 @@ def _open_conflicts_for(store, *, entity_type: str, key: str, field_name: str):
         ).first()
         if ent is None:
             return []
-        return list(s.exec(
-            select(ConflictRow).where(
-                ConflictRow.entity_id == ent.id,
-                ConflictRow.field_name == field_name,
-                ConflictRow.resolved_at.is_(None),  # type: ignore[union-attr]
-            )
-        ).all())
+        return list(
+            s.exec(
+                select(ConflictRow).where(
+                    ConflictRow.entity_id == ent.id,
+                    ConflictRow.field_name == field_name,
+                    col(ConflictRow.resolved_at).is_(None),
+                )
+            ).all()
+        )
 
 
 # === Tests ===
+
 
 def test_full_demo_flow(tmp_path: Path) -> None:
     settings = _settings_for_test(tmp_path)
@@ -174,10 +187,14 @@ def test_full_demo_flow(tmp_path: Path) -> None:
     result_call = _ingest_corpus_doc(store, schema, llm, settings, "acme_call_2026-04-15.md")
     logger.info("call ingest: entities=%d", len(result_call.entities))
 
-    writes = _live_writes_for(store, entity_type="Customer", key="Acme Corp", field_name="deal_size")
+    writes = _live_writes_for(
+        store, entity_type="Customer", key="Acme Corp", field_name="deal_size"
+    )
     if not writes:
         # Some extractions might use "Acme" vs "Acme Corp" — fall back.
-        writes = _live_writes_for(store, entity_type="Customer", key="Acme", field_name="deal_size")
+        writes = _live_writes_for(
+            store, entity_type="Customer", key="Acme", field_name="deal_size"
+        )
     if len(writes) != 1:
         raise AssertionError(
             f"expected 1 deal_size write after the call, got {len(writes)}: "
@@ -189,9 +206,7 @@ def test_full_demo_flow(tmp_path: Path) -> None:
 
     no_conflict_yet = _open_conflicts_for(
         store, entity_type="Customer", key="Acme Corp", field_name="deal_size"
-    ) or _open_conflicts_for(
-        store, entity_type="Customer", key="Acme", field_name="deal_size"
-    )
+    ) or _open_conflicts_for(store, entity_type="Customer", key="Acme", field_name="deal_size")
     if no_conflict_yet:
         raise AssertionError("no conflict should exist after the first write")
 
@@ -208,7 +223,10 @@ def test_full_demo_flow(tmp_path: Path) -> None:
         raise AssertionError("no deal_size writes found under any expected key")
 
     writes = _live_writes_for(
-        store, entity_type="Customer", key=canonical_key, field_name="deal_size",
+        store,
+        entity_type="Customer",
+        key=canonical_key,
+        field_name="deal_size",
     )
     if len(writes) < 2:
         raise AssertionError(
@@ -221,7 +239,10 @@ def test_full_demo_flow(tmp_path: Path) -> None:
             f"expected the two writes to disagree, got identical values: {distinct}"
         )
     open_conflicts = _open_conflicts_for(
-        store, entity_type="Customer", key=canonical_key, field_name="deal_size",
+        store,
+        entity_type="Customer",
+        key=canonical_key,
+        field_name="deal_size",
     )
     if len(open_conflicts) != 1:
         raise AssertionError(f"expected exactly one open conflict, got {len(open_conflicts)}")
@@ -232,11 +253,14 @@ def test_full_demo_flow(tmp_path: Path) -> None:
         candidates=writes,
         spec=AutoResolverSpec(),
         ruleset=initial_ruleset,
-        entity_type="Customer", field_name="deal_size",
+        entity_type="Customer",
+        field_name="deal_size",
         llm=llm,
     )
     if auto.status != FieldStatus.KNOWN:
-        raise AssertionError(f"auto+default should resolve to KNOWN, got {auto.status}: {auto.reason}")
+        raise AssertionError(
+            f"auto+default should resolve to KNOWN, got {auto.status}: {auto.reason}"
+        )
     if auto.winner is None:
         raise AssertionError("auto+default should pick a winner")
     auto_value = json.loads(auto.winner.value_json)
@@ -260,7 +284,8 @@ def test_full_demo_flow(tmp_path: Path) -> None:
         candidates=writes,
         spec=AutoResolverSpec(),
         ruleset=skilled_ruleset,
-        entity_type="Customer", field_name="deal_size",
+        entity_type="Customer",
+        field_name="deal_size",
         llm=llm,
     )
     if skilled.status != FieldStatus.KNOWN:
@@ -281,7 +306,10 @@ def test_full_demo_flow(tmp_path: Path) -> None:
     # --- 5. Source-remove the email and re-resolve. Should fall back to ~250000. ---
     _delete_document_and_writes(store, label="email_jane_2026-04-17.md")
     surviving_writes = _live_writes_for(
-        store, entity_type="Customer", key=canonical_key, field_name="deal_size",
+        store,
+        entity_type="Customer",
+        key=canonical_key,
+        field_name="deal_size",
     )
     if len(surviving_writes) != 1:
         raise AssertionError(
@@ -292,7 +320,8 @@ def test_full_demo_flow(tmp_path: Path) -> None:
         candidates=surviving_writes,
         spec=AutoResolverSpec(),
         ruleset=skilled_ruleset,
-        entity_type="Customer", field_name="deal_size",
+        entity_type="Customer",
+        field_name="deal_size",
         llm=llm,
     )
     if after_churn.status != FieldStatus.KNOWN:
@@ -307,8 +336,10 @@ def test_full_demo_flow(tmp_path: Path) -> None:
 
     # --- 6. Sanity: ACL evaluator sees nothing-by-default for an unknown agent. ---
     acl_decision = evaluate_field_read(
-        entity_type="Customer", field_name="deal_size",
-        agent_id="random_other", ruleset=skilled_ruleset,
+        entity_type="Customer",
+        field_name="deal_size",
+        agent_id="random_other",
+        ruleset=skilled_ruleset,
     )
     if acl_decision.allowed:
         raise AssertionError("default-deny ACL was not enforced")
@@ -322,43 +353,10 @@ def _is_around(value, target: int, tolerance: int = 50_000) -> bool:
 
 
 def _delete_document_and_writes(store, *, label: str) -> None:
-    """Source removal: delete the DocumentRow + every FieldWriteRow that traces to it."""
+    """Look up the document by label and call the production source-removal helper."""
     with store.session() as s:
         doc = s.exec(select(DocumentRow).where(DocumentRow.label == label)).first()
         if doc is None:
             raise AssertionError(f"no document with label {label!r}")
-        writes = list(s.exec(
-            select(FieldWriteRow).where(FieldWriteRow.source_document_id == doc.id)
-        ).all())
-        for w in writes:
-            s.delete(w)
-        # Mark any associated ConflictRows resolved so the next read recomputes from
-        # the surviving writes alone (this is the v0 "source removal triggers reeval"
-        # placeholder — Step 7 will do this through a real DELETE /documents handler).
-        with_doc_remaining = s.exec(
-            select(FieldWriteRow).where(
-                FieldWriteRow.entity_id.in_(  # type: ignore[union-attr]
-                    {w.entity_id for w in writes}
-                )
-            )
-        ).all() if writes else []
-        # Recompute distinct values per (entity, field); close conflicts that no longer
-        # have multiple distinct values.
-        from collections import defaultdict
-        by_field: dict[tuple, set[str]] = defaultdict(set)
-        for w in with_doc_remaining:
-            by_field[(w.entity_id, w.field_name)].add(w.value_json)
-        for (entity_id, field_name), distinct in by_field.items():
-            if len(distinct) <= 1:
-                conflicts = s.exec(
-                    select(ConflictRow).where(
-                        ConflictRow.entity_id == entity_id,
-                        ConflictRow.field_name == field_name,
-                        ConflictRow.resolved_at.is_(None),  # type: ignore[union-attr]
-                    )
-                ).all()
-                for c in conflicts:
-                    c.resolved_at = datetime.now(timezone.utc)
-                    s.add(c)
-        s.delete(doc)
-        s.commit()
+        doc_id = doc.id
+    remove_document(store=store, document_id=doc_id)

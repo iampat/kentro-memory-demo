@@ -8,9 +8,9 @@ one registry per request and that's fine.
 
 import logging
 
+from kentro.types import EntityTypeDef
 from sqlmodel import select
 
-from kentro.types import EntityTypeDef
 from kentro_server.store import TenantStore
 from kentro_server.store.models import SchemaTypeRow
 
@@ -38,8 +38,12 @@ class SchemaRegistry:
                 session.add(existing)
             session.commit()
         self._cache = None
-        logger.info("schema registered: tenant=%s type=%s fields=%d",
-                    self._store.tenant_id, type_def.name, len(type_def.fields))
+        logger.info(
+            "schema registered: tenant=%s type=%s fields=%d",
+            self._store.tenant_id,
+            type_def.name,
+            len(type_def.fields),
+        )
 
     def register_many(self, type_defs: list[EntityTypeDef]) -> None:
         for td in type_defs:
@@ -51,9 +55,7 @@ class SchemaRegistry:
             return self._cache
         with self._store.session() as session:
             rows = list(session.exec(select(SchemaTypeRow)).all())
-        self._cache = [
-            EntityTypeDef.model_validate_json(row.definition_json) for row in rows
-        ]
+        self._cache = [EntityTypeDef.model_validate_json(row.definition_json) for row in rows]
         return self._cache
 
     def names(self) -> list[str]:

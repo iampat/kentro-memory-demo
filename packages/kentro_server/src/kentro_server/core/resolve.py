@@ -21,6 +21,7 @@ from kentro.types import (
     RuleSet,
     SkillResolverSpec,
 )
+
 from kentro_server.skills.llm_client import LLMClient
 from kentro_server.store.models import FieldWriteRow
 
@@ -51,7 +52,9 @@ def resolve(
 ) -> ResolvedFieldValue:
     """Pick a winner over `candidates` per `spec`. Empty candidates is the caller's bug."""
     if not candidates:
-        raise ValueError("resolve() called with zero candidates — caller should short-circuit on UNKNOWN")
+        raise ValueError(
+            "resolve() called with zero candidates — caller should short-circuit on UNKNOWN"
+        )
 
     # Single-candidate fast path: nothing to resolve.
     if len(candidates) == 1:

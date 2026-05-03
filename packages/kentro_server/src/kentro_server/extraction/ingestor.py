@@ -22,9 +22,6 @@ import logging
 import time
 from uuid import uuid4
 
-from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
-
 from kentro.types import (
     EntityRecord,
     ExtractionStep,
@@ -33,6 +30,9 @@ from kentro.types import (
     IngestionResult,
     LineageRecord,
 )
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
+
 from kentro_server.core.conflict import record_field_write
 from kentro_server.skills.llm_client import LLMClient
 from kentro_server.store import TenantStore
@@ -68,113 +68,132 @@ def ingest_document(
     content_hash = hashlib.sha256(content).hexdigest()
     doc_id = uuid4()
     blob_key = f"{doc_id}.md"
-    store.blobs.put(blob_key, content)
 
     registered_names = {td.name for td in registered_schemas}
     registered_fields_by_type: dict[str, set[str]] = {
         td.name: {f.name for f in td.fields} for td in registered_schemas
     }
 
-    started = time.perf_counter()
-    extraction = llm.extract_entities(
-        document_text=text,
-        registered_schemas=registered_schemas,
-        document_label=label,
-        model=smart_model,
-    )
-    latency_ms = int((time.perf_counter() - started) * 1000)
+    # Stage the blob first so the subsequent DB rows can reference it. If anything
+    # below fails (extraction, DB commit), `_cleanup_blob_on_failure` removes the
+    # orphaned blob so retries don't accumulate unreachable data.
+    store.blobs.put(blob_key, content)
+    try:
+        started = time.perf_counter()
+        extraction = llm.extract_entities(
+            document_text=text,
+            registered_schemas=registered_schemas,
+            document_label=label,
+            model=smart_model,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
 
-    extraction_step_id = uuid4()
-    output_summary = (
-        f"{len(extraction.entities)} entities; "
-        f"{sum(len(e.fields) for e in extraction.entities)} fields"
-    )
-    if extraction.notes:
-        output_summary += f"; notes: {extraction.notes[:120]}"
+        extraction_step_id = uuid4()
+        output_summary = (
+            f"{len(extraction.entities)} entities; "
+            f"{sum(len(e.fields) for e in extraction.entities)} fields"
+        )
+        if extraction.notes:
+            output_summary += f"; notes: {extraction.notes[:120]}"
 
-    extraction_step_dto = ExtractionStep(
-        id=extraction_step_id,
-        name="extract_entities",
-        model=smart_model,
-        input_excerpt=text[:_INPUT_EXCERPT_CHARS],
-        output_summary=output_summary,
-        tokens_in=0,
-        tokens_out=0,
-        latency_ms=latency_ms,
-    )
+        extraction_step_dto = ExtractionStep(
+            id=extraction_step_id,
+            name="extract_entities",
+            model=smart_model,
+            input_excerpt=text[:_INPUT_EXCERPT_CHARS],
+            output_summary=output_summary,
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=latency_ms,
+        )
 
-    entity_records: list[EntityRecord] = []
-    with store.session() as session:
-        session.add(DocumentRow(
-            id=doc_id,
-            blob_key=blob_key,
-            content_hash=content_hash,
-            label=label,
-        ))
-        session.add(ExtractionStepRow(
-            id=extraction_step_dto.id,
-            name=extraction_step_dto.name,
-            model=extraction_step_dto.model,
-            input_excerpt=extraction_step_dto.input_excerpt,
-            output_summary=extraction_step_dto.output_summary,
-            tokens_in=extraction_step_dto.tokens_in,
-            tokens_out=extraction_step_dto.tokens_out,
-            latency_ms=extraction_step_dto.latency_ms,
-        ))
-        session.flush()
-
-        for ext_entity in extraction.entities:
-            if ext_entity.entity_type not in registered_names:
-                logger.warning(
-                    "ingestor: extractor returned unregistered entity_type=%r — skipping",
-                    ext_entity.entity_type,
+        entity_records: list[EntityRecord] = []
+        with store.session() as session:
+            session.add(
+                DocumentRow(
+                    id=doc_id,
+                    blob_key=blob_key,
+                    content_hash=content_hash,
+                    label=label,
                 )
-                continue
-
-            entity_id = _get_or_create_entity_id(
-                session, entity_type=ext_entity.entity_type, key=ext_entity.key,
             )
-            allowed_fields = registered_fields_by_type.get(ext_entity.entity_type, set())
-            field_values: dict[str, FieldValue] = {}
-            for ef in ext_entity.fields:
-                if allowed_fields and ef.field_name not in allowed_fields:
+            session.add(
+                ExtractionStepRow(
+                    id=extraction_step_dto.id,
+                    name=extraction_step_dto.name,
+                    model=extraction_step_dto.model,
+                    input_excerpt=extraction_step_dto.input_excerpt,
+                    output_summary=extraction_step_dto.output_summary,
+                    tokens_in=extraction_step_dto.tokens_in,
+                    tokens_out=extraction_step_dto.tokens_out,
+                    latency_ms=extraction_step_dto.latency_ms,
+                )
+            )
+            session.flush()
+
+            for ext_entity in extraction.entities:
+                if ext_entity.entity_type not in registered_names:
                     logger.warning(
-                        "ingestor: extractor returned unregistered field %s.%s — skipping",
-                        ext_entity.entity_type, ef.field_name,
+                        "ingestor: extractor returned unregistered entity_type=%r — skipping",
+                        ext_entity.entity_type,
                     )
                     continue
-                write, _conflict = record_field_write(
+
+                entity_id = _get_or_create_entity_id(
                     session,
-                    entity_id=entity_id,
-                    field_name=ef.field_name,
-                    value_json=ef.value_json,
-                    confidence=ef.confidence,
-                    written_by_agent_id=written_by_agent_id,
-                    rule_version_at_write=rule_version,
-                    source_document_id=doc_id,
-                    extraction_step_id=extraction_step_id,
+                    entity_type=ext_entity.entity_type,
+                    key=ext_entity.key,
                 )
-                lineage = LineageRecord(
-                    source_document_id=doc_id,
-                    written_at=write.written_at,
-                    written_by_agent_id=written_by_agent_id,
-                    rule_version=rule_version,
-                    extraction_step_id=extraction_step_id,
-                )
-                field_values[ef.field_name] = FieldValue(
-                    status=FieldStatus.KNOWN,
-                    value=_decode_value(ef.value_json),
-                    confidence=ef.confidence,
-                    lineage=(lineage,),
+                allowed_fields = registered_fields_by_type.get(ext_entity.entity_type, set())
+                field_values: dict[str, FieldValue] = {}
+                for ef in ext_entity.fields:
+                    if allowed_fields and ef.field_name not in allowed_fields:
+                        logger.warning(
+                            "ingestor: extractor returned unregistered field %s.%s — skipping",
+                            ext_entity.entity_type,
+                            ef.field_name,
+                        )
+                        continue
+                    write, _ = record_field_write(
+                        session,
+                        entity_id=entity_id,
+                        field_name=ef.field_name,
+                        value_json=ef.value_json,
+                        confidence=ef.confidence,
+                        written_by_agent_id=written_by_agent_id,
+                        rule_version_at_write=rule_version,
+                        source_document_id=doc_id,
+                        extraction_step_id=extraction_step_id,
+                    )
+                    lineage = LineageRecord(
+                        source_document_id=doc_id,
+                        written_at=write.written_at,
+                        written_by_agent_id=written_by_agent_id,
+                        rule_version=rule_version,
+                        extraction_step_id=extraction_step_id,
+                    )
+                    field_values[ef.field_name] = FieldValue(
+                        status=FieldStatus.KNOWN,
+                        value=_decode_value(ef.value_json),
+                        confidence=ef.confidence,
+                        lineage=(lineage,),
+                    )
+
+                entity_records.append(
+                    EntityRecord(
+                        entity_type=ext_entity.entity_type,
+                        key=ext_entity.key,
+                        fields=field_values,
+                    )
                 )
 
-            entity_records.append(EntityRecord(
-                entity_type=ext_entity.entity_type,
-                key=ext_entity.key,
-                fields=field_values,
-            ))
-
-        session.commit()
+            session.commit()
+    except BaseException:
+        # Extraction or DB persistence failed after the blob was written. Best-effort
+        # cleanup of the orphan blob, then re-raise the original failure.
+        # `BaseException` (not `Exception`) so KeyboardInterrupt also cleans up.
+        _delete_orphan_blob(store, blob_key)
+        raise
 
     return IngestionResult(
         source_document_id=doc_id,
@@ -223,12 +242,23 @@ def _get_or_create_entity_id(session, *, entity_type: str, key: str):
     return new_entity.id
 
 
+def _delete_orphan_blob(store: TenantStore, blob_key: str) -> None:
+    """Best-effort delete of a blob whose owning DB rows never landed. Never raises;
+    logs and swallows OS-level errors so it can run safely from an exception handler."""
+    try:
+        store.blobs.delete(blob_key)
+    except OSError:
+        logger.warning("ingestor: failed to clean up orphaned blob %r", blob_key, exc_info=True)
+
+
 def _decode_value(value_json: str):
     """Best-effort JSON decode; fall back to the raw string if the LLM returned non-JSON."""
     try:
         return json.loads(value_json)
     except json.JSONDecodeError:
-        logger.warning("ingestor: extractor returned non-JSON value, keeping as string: %r", value_json[:80])
+        logger.warning(
+            "ingestor: extractor returned non-JSON value, keeping as string: %r", value_json[:80]
+        )
         return value_json
 
 

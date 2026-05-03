@@ -12,7 +12,7 @@ Conventions:
   but is kept for lineage and possible re-resolution after source churn.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import UniqueConstraint
@@ -20,7 +20,7 @@ from sqlmodel import Field, SQLModel
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class AgentRow(SQLModel, table=True):
