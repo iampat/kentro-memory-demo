@@ -28,7 +28,7 @@ The system has two deployable artifacts and one demo UI.
 - **`kentro` (the SDK)** — Python package consumed by developers and agents. Thin HTTP client wrapping the server's API. Plus Pydantic types and Jupyter/Colab visualization helpers. **No persistence, no extraction logic, no LLM calls in the SDK** — every public method is a server call.
 - **`kentro_demo_ui`** — a small Next.js web app for the recorded 3-minute video. Talks to the same `kentro_server` over its HTTP API. Not part of the SDK; not what end-users will run; exists only to make the demo legible on screen.
 
-Why this split: the SDK has to remain installable, lightweight, and testable in isolation; the engine has to stay independently deployable so we can offer managed cloud + on-prem with the same binary. This is the architecture commitment in `memory.md` under "SDK Design — locked decisions (v0)" and the deployment commitment in `application-answers.md` Q7.
+Why this split: the SDK has to remain installable, lightweight, and testable in isolation; the engine has to stay independently deployable so we can offer managed cloud + on-prem with the same binary. This is the architecture commitment in `memory.md` under "SDK Design — locked decisions (v0)".
 
 ### 1.2 Repository layout
 
@@ -76,7 +76,14 @@ kentro/                           # repo root
     └── scenario/                 # end-to-end demo scenario reproduction
 ```
 
-The two Python packages are independently installable. The SDK package has zero runtime dependency on the server package — it only imports types it has copies of (via shared Pydantic models duplicated by codegen, or by depending on a small `kentro_proto` package; pick during Step 2).
+The two Python packages are independently installable. The SDK package has zero runtime dependency on the server package.
+
+**Type sharing — locked 2026-05-02.** No codegen, no shared `kentro_proto` package. Both packages keep **manually duplicated** Pydantic v2 type definitions (SDK in `packages/kentro/src/kentro/types.py`; server in `packages/kentro_server/src/kentro_server/api/types.py`). Parity is enforced by:
+
+1. A **Claude skill** at `.claude/skills/sync-types/` — given a change in one file, it produces the matching edit for the other and explains any intentional divergence.
+2. A **parity unit test** at `tests/unit/types_parity_test.py` — imports both modules, walks every model, and asserts identical field names, types, defaults, and discriminator tags. CI fails if the two drift.
+
+Rationale: codegen adds tooling complexity and obscures the human-written contract; a shared `kentro_proto` package adds a third installable artifact whose only job is to ferry types. The duplicated-with-skill+test approach keeps both files readable, lets the SDK and server diverge intentionally when needed (e.g., MCP-facing string statuses on the server), and surfaces drift loudly in CI.
 
 ### 1.3 Tech stack
 
@@ -145,12 +152,12 @@ The high-level paths through the system, in plain English. Detailed schemas live
 - **Dev mode (founder's machine):** `uv sync` to install everything; `kentro-server start` runs the FastAPI server on `localhost:8000`. SDK connects via `KENTRO_BASE_URL=http://localhost:8000`. Web demo UI runs via `pnpm dev` on `localhost:3000`, talking to the same server.
 - **Colab live demo:** notebook calls `!pip install kentro`, then a setup cell starts the server as a background subprocess (`subprocess.Popen(["kentro-server", "start"])`) and waits for `/healthz` to return 200. SDK connects to `localhost:8000`. No external hosting required for that path.
 
-### 1.7 Hosted demo on GCP (v0)
+### 1.7 Hosted demo on GCP (v0) — built last
 
-Real working demo a YC reviewer can click and play with. **Single small GCP VM, no Kubernetes, no Cloud Run, no fancy infra. Demo-grade, not production-grade.**
+Real working demo a YC reviewer can click and play with. **Single small GCP VM, no Kubernetes, no Cloud Run, no fancy infra. Demo-grade, not production-grade. This work happens last (Step 12) — only after Steps 0–11 are green and the scenario test passes locally.**
 
-- **Frontend:** Vercel (Next.js native, free tier, auto-HTTPS). One env var: `KENTRO_API_BASE_URL=https://api.kentro.ai`. Domain: `demo.kentro.ai`.
-- **Server:** GCP Compute Engine **e2-medium** VM (Ubuntu 24.04, 2 vCPU shared, 4GB RAM, ~$25/month). Docker runs `kentro-server`. Caddy reverse-proxies `:443` with auto Let's Encrypt certs. Domain: `api.kentro.ai`. Static IP. ~$30/month all-in for infrastructure; ~$50–80/month including LLM API budget for demo traffic.
+- **Frontend:** **served by `kentro-server` itself.** The demo UI ships as a static build (see Step 10) that the FastAPI app mounts via `StaticFiles` at `/`. No Vercel, no separate frontend deployment. One origin, one TLS cert, one container to operate. Domain: `demo.kentro.ai`.
+- **Server:** GCP Compute Engine **e2-medium** VM (Ubuntu 24.04, 2 vCPU shared, 4GB RAM, ~$25/month). Docker runs `kentro-server` (which serves both the API and the embedded static UI). Caddy reverse-proxies `:443` with auto Let's Encrypt certs. Static IP. ~$30/month all-in for infrastructure; ~$50–80/month including LLM API budget for demo traffic.
 - **Persistent state:** mounted GCP persistent disk holding `kentro_state/`. SQLite, Witchcraft, source markdown files all live here. Disk snapshots are the backup story.
 - **Tenancy: 5 hardcoded demo tenants, no garbage collection.** Tenants 1–5 are seeded at server start (each with a fresh copy of the canonical synthetic corpus). Each frontend session is assigned to a tenant on first visit, in round-robin order. **No idle GC, no tenant creation flow, no auth system** — manually re-seed all five via `kentro-server seed-demo` if state gets crusty during the demo period. Five tenants is enough headroom for concurrent reviewers; if one tenant's state gets messy, others still work.
 - **Auth for the demo:** the assigned tenant's API key. No login flow, no account system. Tenant-to-key mapping is a config file, not a DB table.
@@ -203,9 +210,11 @@ _To be written. Method signatures. Error mapping. Sync v0 / async v0.1 split._
 
 _To be written. `viz.access_matrix()`, `viz.entity_graph()`, `viz.lineage(...)`, `viz.conflicts()`, `viz.rule_diff(...)`. Inline-rendering strategy._
 
-## Step 10 — Demo web UI
+## Step 10 — Demo web UI (served by `kentro-server`)
 
-_To be written. The Next.js app for the recorded video. Scene-by-scene component layout. Animation and timing for the four-dimensional rule change._
+_To be written._ The UI is a single-page app for the recorded video, scene-by-scene component layout, with the four-dimensional rule-change animation. **It does not deploy separately.** The build output is copied into `packages/kentro_server/src/kentro_server/static/` and mounted by FastAPI's `StaticFiles` so the entire demo runs from one origin (locally and on GCP).
+
+Open sub-decision (resolve at the start of Step 10): keep Next.js with `output: 'export'` (static export) OR drop Next.js for **Vite + React + Tailwind + shadcn/ui**. Recommendation: Vite — none of the SSR / middleware / server-action features Next.js gives are useful here, and the Vite build is a clean static-asset emit with no Next.js runtime to wrangle.
 
 ## Step 11 — Synthetic corpus & scenario test
 
@@ -249,6 +258,12 @@ End-to-end pytest that walks every beat from `demo.md`'s 3-minute beat sheet:
 9. Source-delete the email; assert resolver re-evaluates against surviving evidence (Colab-only beat, but include in the test).
 
 If every assertion passes, the demo recording can proceed with confidence. CI runs this on every commit.
+
+---
+
+## Step 12 — Hosted GCP deployment (final step)
+
+_To be written._ Realizes §1.7 on GCP: e2-medium VM, Docker, Caddy + Let's Encrypt, persistent disk, `deploy.sh`, 5 hardcoded tenants seeded at boot, manual operations only. Do not start this step until every prior step is `done` in `IMPLEMENTATION_PLAN.md` and the scenario test passes locally.
 
 ---
 
