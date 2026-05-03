@@ -267,9 +267,22 @@ Pure data transformations over SDK types in `kentro.viz`; Rich-based CLI rendere
 
 ## Step 10 — Demo UI (served from kentro-server)
 
-**Status:** `pending`
+**Status:** `in_progress`
 
 Lock-in change vs handoff: **no Vercel.** The UI ships as a static build that `kentro-server` serves via FastAPI `StaticFiles`.
+
+Bootstrap landed (PR for `serve-static-ui-prototype`): Claude-Designed React-via-CDN prototype copied into `packages/kentro_server/src/kentro_server/static/` and served at `/` via `app.mount("/", StaticFiles(html=True))`. Mount sits **after** all explicit `@app.get` routes so `/healthz`, `/llm/stats`, and `/mcp/` are not shadowed (a regression test in `tests/unit/healthz_test.py::test_mcp_mount_still_works_after_static` guards this). Explicit `/mcp → /mcp/` 307 redirect prevents the StaticFiles catch-all from swallowing the trailing-slashless URL.
+
+Companion bootstrap items shipped in the same PR:
+- Demo schema set rounded out: `Deal` and `AuditLog` Entity subclasses added to `kentro_server.demo.schemas`; `seed-demo` registers all four (`Customer`, `Person`, `Deal`, `AuditLog`).
+- `DocumentRow.source_class: str | None` added (indexed) so the prototype's "transcript / email / meeting / note" pills can be sourced from real data; plumbed through `IngestRequest` → `ingest_document(...)` → `DocumentRow`. Migration: delete `kentro_state` to rebuild, or `ALTER TABLE`.
+- `kentro.rules.render_rule_as_rego(rule)` added (display sophistication only — never parsed). Per-variant Rego shapes: `FieldReadRule` allow → `allow { ... }`, deny → `deny[msg]`; `WriteRule` omits `field` for wildcards; `EntityVisibilityRule` includes `entity_key` when set; `SkillResolverSpec` with "written/verbal" prompts uses the canonical demo Rego shape, otherwise generic `skill_pick` fallback. 10 new tests in `rules_helpers_test.py`.
+- `Taskfile.yaml` at repo root: `dev`, `open`, `seed`, `reset`, `test`, `test:integration`, `lint`, `format`, `format:check`, `typecheck`, `gates`, `smoke`. Replaces the proposed `deploy.sh`.
+
+Still to come for Step 10 done:
+- Wire the prototype's data layer to the real HTTP API (currently `data.js` ships canned fixtures).
+- Two-pane policy editor (NL chat + access matrix) hooked to `POST /rules/parse` + `POST /rules/apply`, using `viz.access_matrix()` and `viz.rule_diff()`.
+- `<TicketBadge>` + `<EscalationToast>` once the `SkillResolverDecision.actions` extension lands (see "Workflow-aware Skills" in the deferred section below).
 
 Open sub-decision (resolve at the start of Step 10): keep Next.js with `output: 'export'` (static export) OR drop Next.js for Vite + React + Tailwind + shadcn/ui (lighter, no SSR/middleware features we'd be losing). Recommendation: Vite — Next.js's SSR is value we don't use here, and the static-export path is friction we don't need.
 

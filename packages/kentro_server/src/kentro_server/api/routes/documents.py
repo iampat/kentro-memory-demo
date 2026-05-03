@@ -37,6 +37,7 @@ def ingest(
         written_by_agent_id=principal.agent_id,
         rule_version=ruleset.version,
         smart_model=body.smart_model or settings.kentro_llm_smart_model,
+        source_class=body.source_class,
     )
 
 

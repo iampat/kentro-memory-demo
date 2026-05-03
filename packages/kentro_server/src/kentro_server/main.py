@@ -9,6 +9,8 @@ import httpx
 import typer
 import uvicorn
 from fastapi import Depends, FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     EntityVisibilityRule,
@@ -26,7 +28,7 @@ from kentro_server.api import (
     rules_router,
     schema_router,
 )
-from kentro_server.demo import Customer, Person
+from kentro_server.demo import AuditLog, Customer, Deal, Person
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import cache_metadata, cache_stats, make_llm_client
@@ -176,6 +178,15 @@ app.include_router(memory_router)
 app.mount("/mcp", _mcp_mount)
 
 
+# `/mcp` (no trailing slash) needs an explicit redirect: Starlette's Mount only
+# matches `/mcp/*` (with the slash), and the catch-all StaticFiles mount we
+# install at the end would otherwise 404 the bare `/mcp` request before the
+# inner app could redirect. Without this, `claude mcp add ... /mcp` fails.
+@app.get("/mcp", include_in_schema=False)
+def _mcp_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/mcp/", status_code=307)
+
+
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
@@ -218,6 +229,22 @@ def llm_stats(client: LLMClientDep) -> dict:
         "total": stats.total,
         "hit_rate": round(stats.hit_rate, 4),
     }
+
+
+# Serve the demo UI from `/`. Mounted LAST so that every explicit @app.get / Mount
+# above wins first (Starlette walks routes in registration order). `html=True`
+# makes `/` serve `index.html`. Mount path passed as `/` becomes the catch-all;
+# any request that didn't match an explicit route lands here, which is exactly
+# the behavior we want for an SPA-style static bundle.
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")
+else:
+    logger.warning(
+        "static UI directory missing at %s — `/` will 404. Run `git pull` or "
+        "reinstall the package to get the prototype bundle.",
+        _STATIC_DIR,
+    )
 
 
 cli = typer.Typer(no_args_is_help=True, add_completion=False, pretty_exceptions_enable=False)
@@ -302,7 +329,12 @@ def seed_demo(
     headers = {"Authorization": f"Bearer {api_key}"}
     base = base_url.rstrip("/")
 
-    type_defs = [entity_type_def_from(Customer), entity_type_def_from(Person)]
+    type_defs = [
+        entity_type_def_from(Customer),
+        entity_type_def_from(Person),
+        entity_type_def_from(Deal),
+        entity_type_def_from(AuditLog),
+    ]
     body = {"type_defs": [td.model_dump(mode="json") for td in type_defs]}
     r = httpx.post(f"{base}/schema/register", headers=headers, json=body, timeout=10.0)
     if r.status_code != 200:

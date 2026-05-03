@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent K Icon Preview</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f5f5f7;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+    color: #1d1d1f;
+  }
+  h1 { font-size: 24px; font-weight: 600; }
+  h2 { font-size: 16px; font-weight: 500; color: #86868b; margin-top: 40px; }
+  .preview-row {
+    display: flex;
+    gap: 60px;
+    margin: 20px 0;
+    align-items: flex-end;
+  }
+  .preview-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .preview-item span {
+    font-size: 12px;
+    color: #86868b;
+  }
+  .icon-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+  }
+  .light { background: #fff; }
+  .dark { background: #1a1a1a; }
+  .tab-bar {
+    background: #f9f9f9;
+    border-top: 1px solid #e5e5e5;
+    display: flex;
+    justify-content: center;
+    gap: 60px;
+    padding: 8px 40px 24px;
+    border-radius: 0 0 20px 20px;
+    width: 320px;
+  }
+  .tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .tab span {
+    font-size: 10px;
+  }
+  .tab.active span { color: #2563EB; }
+  .tab.inactive span { color: #98A2B3; }
+  .phone-frame {
+    background: #fff;
+    border-radius: 20px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+    overflow: hidden;
+    width: 320px;
+  }
+  .phone-content {
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ccc;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Agent K — Icon Design</h1>
+<p style="color: #86868b; max-width: 500px; text-align: center;">
+  Secret agent silhouette. Gender-ambiguous. Could be human, could be robot.
+  The tie is shaped like a K.
+</p>
+
+<h2>Icon at Different Sizes</h2>
+<div class="preview-row">
+  <!-- Large preview -->
+  <div class="preview-item">
+    <div class="icon-box light" style="width:120px; height:120px; border: 1px solid #e5e5e5;">
+      <svg width="80" height="80" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- Head — circle, slightly robotic with flat bottom -->
+        <circle cx="50" cy="28" r="16" fill="#1d1d1f"/>
+        <!-- Glasses/visor — horizontal line across face, secret agent style -->
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="#f5f5f7"/>
+        <!-- Shoulders — broad, angular, agent suit -->
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#1d1d1f"/>
+        <!-- Collar notch — V-shape -->
+        <path d="M43 48 L50 58 L57 48" fill="#f5f5f7" stroke="#f5f5f7" stroke-width="1"/>
+        <!-- K-shaped tie -->
+        <path d="M48 58 L48 82" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <span>80px (detail view)</span>
+  </div>
+
+  <!-- Medium preview -->
+  <div class="preview-item">
+    <div class="icon-box light" style="width:60px; height:60px; border: 1px solid #e5e5e5;">
+      <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="28" r="16" fill="#1d1d1f"/>
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="#f5f5f7"/>
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#1d1d1f"/>
+        <path d="M43 48 L50 58 L57 48" fill="#f5f5f7" stroke="#f5f5f7" stroke-width="1"/>
+        <path d="M48 58 L48 82" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="#f5f5f7" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <span>40px</span>
+  </div>
+
+  <!-- Tab bar size -->
+  <div class="preview-item">
+    <div class="icon-box light" style="width:36px; height:36px; border: 1px solid #e5e5e5;">
+      <svg width="25" height="25" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="28" r="16" fill="#1d1d1f"/>
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="#f5f5f7"/>
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#1d1d1f"/>
+        <path d="M43 48 L50 58 L57 48" fill="#f5f5f7" stroke="#f5f5f7" stroke-width="1"/>
+        <path d="M48 58 L48 82" stroke="#f5f5f7" stroke-width="3" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="#f5f5f7" stroke-width="3" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="#f5f5f7" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <span>25px (tab bar)</span>
+  </div>
+</div>
+
+<h2>In Tab Bar Context</h2>
+<div class="phone-frame">
+  <div class="phone-content">Agent K screen content...</div>
+  <div class="tab-bar">
+    <div class="tab active">
+      <svg width="25" height="25" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="28" r="16" fill="#2563EB"/>
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="#f9f9f9"/>
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#2563EB"/>
+        <path d="M43 48 L50 58 L57 48" fill="#f9f9f9" stroke="#f9f9f9" stroke-width="1"/>
+        <path d="M48 58 L48 82" stroke="#f9f9f9" stroke-width="3" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="#f9f9f9" stroke-width="3" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="#f9f9f9" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <span>Agent K</span>
+    </div>
+    <div class="tab inactive">
+      <svg width="25" height="25" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 5.5C3 4.12 4.12 3 5.5 3h14C20.88 3 22 4.12 22 5.5v1H3v-1zM3 8h19v12.5c0 1.38-1.12 2.5-2.5 2.5h-14C4.12 23 3 21.88 3 20.5V8z" stroke="#98A2B3" stroke-width="1.5" fill="none"/>
+      </svg>
+      <span>Projects</span>
+    </div>
+  </div>
+</div>
+
+<h2>Tinted (Active vs Inactive)</h2>
+<div class="preview-row">
+  <div class="preview-item">
+    <div class="icon-box light" style="width:60px; height:60px; border: 1px solid #e5e5e5;">
+      <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="28" r="16" fill="#2563EB"/>
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="white"/>
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#2563EB"/>
+        <path d="M43 48 L50 58 L57 48" fill="white" stroke="white" stroke-width="1"/>
+        <path d="M48 58 L48 82" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <span>Active (accent)</span>
+  </div>
+  <div class="preview-item">
+    <div class="icon-box light" style="width:60px; height:60px; border: 1px solid #e5e5e5;">
+      <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="28" r="16" fill="#98A2B3"/>
+        <rect x="34" y="24" width="32" height="6" rx="3" fill="white"/>
+        <path d="M20 68 Q20 52 35 48 L50 44 L65 48 Q80 52 80 68 L80 85 L20 85 Z" fill="#98A2B3"/>
+        <path d="M43 48 L50 58 L57 48" fill="white" stroke="white" stroke-width="1"/>
+        <path d="M48 58 L48 82" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 58" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M48 66 L55 76" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <span>Inactive (tertiary)</span>
+  </div>
+</div>
+
+</body>
+</html>

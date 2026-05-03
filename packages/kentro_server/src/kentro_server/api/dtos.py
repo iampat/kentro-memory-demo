@@ -21,6 +21,15 @@ class IngestRequest(BaseModel):
         default=None,
         description="Human-readable label (filename, subject line, etc.).",
     )
+    source_class: str | None = Field(
+        default=None,
+        description=(
+            "Optional source-class hint persisted on the document row. "
+            "Common values: 'verbal' (calls, transcripts), 'written' (emails, "
+            "tickets), 'system' (machine-generated). Consumed by "
+            "SkillResolvers and the demo UI."
+        ),
+    )
     smart_model: str | None = Field(
         default=None,
         description="Override the configured smart-tier model for this call.",

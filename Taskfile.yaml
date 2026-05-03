@@ -1,0 +1,89 @@
+version: "3"
+
+# Local dev tasks for kentro-memory-demo.
+# Install Task once: `brew install go-task` (or see taskfile.dev/installation).
+# Run `task --list` to see all available tasks.
+
+vars:
+  PORT: '{{.PORT | default "8000"}}'
+  HOST: '{{.HOST | default "127.0.0.1"}}'
+  STATE_DIR: '{{.STATE_DIR | default ".kentro_state"}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  # ── dev loop ────────────────────────────────────────────────────────────────
+
+  dev:
+    desc: Run the kentro-server locally (auto-reload on .py changes)
+    env:
+      KENTRO_STATE_DIR: '{{.STATE_DIR}}'
+    cmds:
+      - uv run uvicorn kentro_server.main:app --reload --host {{.HOST}} --port {{.PORT}}
+
+  open:
+    desc: Open the demo UI in the default browser (server must be running)
+    cmds:
+      - open http://{{.HOST}}:{{.PORT}}/
+
+  seed:
+    desc: Register demo schemas + ingest the synthetic corpus (server must be running). KENTRO_API_KEY required.
+    cmds:
+      - uv run kentro-server seed-demo --base-url http://{{.HOST}}:{{.PORT}}
+
+  reset:
+    desc: Wipe local server state (DBs, tenants.json, llm cache)
+    cmds:
+      - rm -rf {{.STATE_DIR}}
+      - rm -f tenants.json
+
+  # ── quality gates ───────────────────────────────────────────────────────────
+
+  test:
+    desc: Run the unit-test suite
+    cmds:
+      - uv run pytest tests/unit/ -v
+
+  test:integration:
+    desc: Run the integration suite (hits the LLM cache; slower)
+    cmds:
+      - uv run pytest tests/integration/ -v
+
+  lint:
+    desc: Ruff lint
+    cmds:
+      - uv run ruff check .
+
+  format:
+    desc: Ruff format (writes changes)
+    cmds:
+      - uv run ruff format .
+
+  format:check:
+    desc: Ruff format (check only — no writes)
+    cmds:
+      - uv run ruff format --check .
+
+  typecheck:
+    desc: ty type-check
+    cmds:
+      - uv run ty check
+
+  gates:
+    desc: Run every gate the pre-commit hook + CI runs (lint, format-check, typecheck, unit tests)
+    cmds:
+      - task: lint
+      - task: format:check
+      - task: typecheck
+      - task: test
+
+  # ── smoke ───────────────────────────────────────────────────────────────────
+
+  smoke:
+    desc: Curl the running server's /healthz and /llm/stats endpoints
+    cmds:
+      - 'curl -fsS http://{{.HOST}}:{{.PORT}}/healthz | jq .'
+      - 'curl -fsS http://{{.HOST}}:{{.PORT}}/llm/stats | jq .'

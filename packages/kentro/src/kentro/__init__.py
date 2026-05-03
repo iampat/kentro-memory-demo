@@ -35,7 +35,7 @@ from kentro.resolvers import (
     Resolver,
     SkillResolver,
 )
-from kentro.rules import RuleSetDiff, render_rule, ruleset_diff
+from kentro.rules import RuleSetDiff, render_rule, render_rule_as_rego, ruleset_diff
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     Agent,
@@ -129,6 +129,7 @@ __all__ = [
     "evaluate_write",
     "lineage",
     "render_rule",
+    "render_rule_as_rego",
     "rule_diff",
     "ruleset_diff",
 ]
