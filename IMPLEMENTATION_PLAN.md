@@ -54,11 +54,23 @@ Sub-tasks:
 
 ## Step 3 — Persistence layer (SQLite + blobs)
 
-**Status:** `pending`
+**Status:** `done`
 
-SQLModel tables: entities, fields, lineage edges, ACL rules, agents, conflict records, rule versions, documents. Blob abstraction (filesystem in dev; S3 interface stubbed). Single-file schema for v0 — no Alembic.
+SQLModel tables (`packages/kentro_server/src/kentro_server/store/models.py`):
+- `AgentRow`, `DocumentRow`, `EntityRow`, `FieldWriteRow`, `ConflictRow`, `RuleVersionRow`, `RuleRow`, `ExtractionStepRow`.
 
-**What was built:** _pending_
+Per-tenant on-disk layout (`store/tenant_store.py`):
+- `<state_root>/<tenant_id>/state.sqlite` (SQLModel)
+- `<state_root>/<tenant_id>/docs/` (blob root)
+- `<state_root>/<tenant_id>/witchcraft/` (Witchcraft index files; populated in Step 6)
+
+Blob abstraction (`store/blobs.py`): `BlobStore` ABC + `FilesystemBlobStore`. Includes a defense-in-depth check that rejects keys whose resolved path escapes the store root.
+
+`StoreRegistry` lazily instantiates per-tenant stores and exposes `get(tenant_id)`, `reset(tenant_id)`, `known_tenants()`. The `reset` method drops the cached engine and `rm -rf`s the tenant directory — used by the planned `kentro-server reset-tenant <id>` CLI command between demo takes.
+
+Tests (`tests/unit/store_test.py`, 6 cases): schema creation, agent/entity/field-write round-trip, blob put/get/delete, blob path-escape rejection, two-tenant isolation, reset-and-recreate cleanliness. All green.
+
+**What was built:** Per-tenant SQLModel + filesystem blob store. Tenants are config (no tenant table) per handoff §1.7. Conflict-as-memory is supported by leaving every `FieldWriteRow` in place (`superseded` marks loser writes); resolution is a read-time concern. No Alembic — SQLModel `metadata.create_all` is the single migration mechanism for v0.
 
 ---
 
