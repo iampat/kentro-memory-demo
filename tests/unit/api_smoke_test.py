@@ -13,6 +13,7 @@ What's covered:
 """
 
 from collections.abc import Iterator
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -193,8 +194,6 @@ def test_non_admin_cannot_register_schema(client: TestClient) -> None:
 
 def test_non_admin_cannot_delete_documents(client: TestClient) -> None:
     """Source removal is destructive; non-admin must be denied."""
-    from uuid import uuid4
-
     r = client.delete(f"/documents/{uuid4()}", headers=_agent())
     if r.status_code != 403:
         raise AssertionError(f"non-admin DELETE /documents must be 403, got {r.status_code}")

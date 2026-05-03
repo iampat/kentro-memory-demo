@@ -8,6 +8,7 @@ LLM calls.
 
 from collections.abc import Iterator
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 import kentro
@@ -137,8 +138,6 @@ def test_non_admin_raises_admin_required_on_register_schema(
 def test_non_admin_raises_admin_required_on_delete_document(
     routed_test_client: TestClient,
 ) -> None:
-    from uuid import uuid4
-
     with _agent_client(routed_test_client) as c, pytest.raises(kentro.AdminRequiredError):
         c.delete_document(uuid4())
 

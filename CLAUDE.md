@@ -2,6 +2,16 @@
 
 Python project using **UV** for environment/dependency management, **FastAPI** for HTTP, and **SQLModel** (on SQLAlchemy 2.x) for the database layer.
 
+## Codex review default — `--wait`
+
+Whenever you run `/codex:review` or `/codex:adversarial-review`, default to
+`--wait` (foreground). Do not ask "wait or background" and do not background by
+default. The user has decided they want to see the review output inline as part
+of the same turn, even when the scope is large.
+
+Override only if the user explicitly types `--background` (or asks you to run
+it in the background) for that specific invocation.
+
 ## SDK and server share types via `kentro.types` (no duplication)
 
 `packages/kentro/src/kentro/types.py` is the single source of truth for every
@@ -183,6 +193,7 @@ uv python pin 3.13               # pin the Python version (writes .python-versio
 - **Ruff** for formatting and linting. Line length 99, double quotes, 4-space indent.
 - Import order: stdlib → third-party → local, separated by blank lines.
 - No mid-code imports — never `import` inside a function or method. If it's needed to break a circular dependency, restructure the modules instead.
+- **No quoted forward-reference annotations in regular code.** Don't write `def foo() -> "Bar":` — import `Bar` at module top and write `def foo() -> Bar:` directly. Quoted annotations were a workaround for the pre-`from __future__ import annotations` era; today they hide F821 (`Undefined name`) from ruff and the only reason to reach for them is to dodge an import you should have hoisted. The narrow legitimate use is genuine forward references inside the same module (a type defined later in the file). For everything else, hoist the import. (See the `_mcp_redirect` cleanup on 2026-05-03 for the canonical example: a quoted return annotation paired with a function-local `from fastapi.responses import RedirectResponse` violated both this rule and the no-mid-code-imports rule. Fix: one module-top import, no quotes.)
 
 ## Modern Python Idioms
 
