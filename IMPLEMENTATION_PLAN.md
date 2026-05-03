@@ -38,17 +38,17 @@ Notable post-handoff updates (recorded in CHANGE_LOG):
 
 ## Step 2 — Data models (Pydantic v2)
 
-**Status:** `pending`
+**Status:** `done`
 
-Types to define: `Entity`, `Field`, `Agent`, `RuleSet` + Rule variants (FieldReadRule, EntityVisibilityRule, WriteRule, ConflictRule), `EntityRecord`, `FieldValue`, `LineageRecord`, `Conflict`, `WriteResult`, `IngestionResult`, `ExtractionStep`, `ReevaluationReport`, `NLResponse`. Status enums: `FieldStatus`, `WriteStatus`.
+Types defined: `Agent`, `AutoResolverSpec`, `Conflict`, `ConflictRule`, `Entity`, `EntityRecord`, `EntityVisibilityRule`, `ExtractionStep`, `FieldReadRule`, `FieldStatus`, `FieldValue`, `FieldValueCandidate`, `IngestionResult`, `LatestWriteResolverSpec`, `LineageRecord`, `NLResponse`, `PreferAgentResolverSpec`, `ReevaluationReport`, `ResolverSpec`, `RawResolverSpec`, `Rule`, `RuleSet`, `SkillResolverSpec`, `WriteResult`, `WriteRule`, `WriteStatus`.
 
 Sub-tasks:
-- [ ] Define types in `packages/kentro/src/kentro/types.py` (the SDK's source-of-truth copy)
-- [ ] Define mirroring types in `packages/kentro_server/src/kentro_server/api/types.py`
-- [ ] Add parity unit test in `tests/unit/types_parity_test.py` that fails when shapes drift
-- [ ] Author the Claude skill `.claude/skills/sync-types/` that diffs the two and proposes patches
+- [x] Define types in `packages/kentro/src/kentro/types.py` (the SDK's source-of-truth copy)
+- [x] Define mirroring types in `packages/kentro_server/src/kentro_server/api/types.py`
+- [x] Add parity unit test in `tests/unit/types_parity_test.py` (4 sub-checks: symbols, type aliases, enum members, model field shapes — all green)
+- [x] Author the Claude skill `.claude/skills/sync-types/SKILL.md`
 
-**What was built:** _pending_
+**What was built:** Pydantic v2 models for every public DTO — status enums (`FieldStatus`, `WriteStatus`), discriminated-union resolver specs (`Raw/LatestWrite/PreferAgent/Skill/Auto`), discriminated-union rules (`FieldRead/EntityVisibility/Write/Conflict`), `RuleSet`, lineage carriers (`LineageRecord`, `FieldValue`, `FieldValueCandidate`, `Conflict`), records (`EntityRecord`, `Agent`), operation results (`WriteResult`, `IngestionResult`, `ExtractionStep`, `ReevaluationReport`, `NLResponse`), and the `Entity` base class for user schemas. SDK + server mirror are byte-identical at the model-shape level; the parity test normalizes module prefixes so structurally-identical types compare equal. The `.claude/skills/sync-types/` skill documents the workflow for keeping the two files in lockstep and the small, principled exceptions for intentional divergence.
 
 ---
 
