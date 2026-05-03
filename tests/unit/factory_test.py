@@ -42,6 +42,9 @@ def _settings(tmp_path: Path, **overrides) -> Settings:
         "google_api_key": "test-google",
         "kentro_llm_fast_model": "claude-haiku-4-5",
         "kentro_llm_smart_model": "claude-sonnet-4-6",
+        # Mirrors the production default (`kentro.toml`): cache ON. Routing tests
+        # never invoke the wrapped LLM methods, so no actual I/O happens; if any
+        # future test in this file does invoke them, hits return for free.
         "kentro_llm_cache_enabled": True,
         "kentro_state_dir": tmp_path,
     }
@@ -241,8 +244,18 @@ def test_mixed_providers_with_one_missing_key_raises(tmp_path: Path) -> None:
 
 
 def test_cache_can_be_disabled(tmp_path: Path) -> None:
+    """The factory's CachingLLMClient honors `kentro_llm_cache_enabled=False`."""
     client = make_llm_client(_settings(tmp_path, kentro_llm_cache_enabled=False))
     if not isinstance(client, CachingLLMClient):
         raise AssertionError("client must still be the cache wrapper")
     if client.enabled:
         raise AssertionError("cache must be disabled when KENTRO_LLM_CACHE_ENABLED=False")
+
+
+def test_cache_can_be_enabled(tmp_path: Path) -> None:
+    """The factory's CachingLLMClient honors `kentro_llm_cache_enabled=True`."""
+    client = make_llm_client(_settings(tmp_path, kentro_llm_cache_enabled=True))
+    if not isinstance(client, CachingLLMClient):
+        raise AssertionError("client must still be the cache wrapper")
+    if not client.enabled:
+        raise AssertionError("cache must be enabled when KENTRO_LLM_CACHE_ENABLED=True")
