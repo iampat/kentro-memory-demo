@@ -53,6 +53,20 @@ class _FakeExtractor(LLMClient):
             return ExtractionResult(entities=())
         return self.queue.pop(0)
 
+    def identify_nl_intents(self, *, text, model=None):
+        raise NotImplementedError("not exercised in ingestor_test")
+
+    def parse_nl_rule(
+        self,
+        *,
+        intent_description,
+        intent_kind,
+        registered_schemas,
+        known_agent_ids,
+        model=None,
+    ):
+        raise NotImplementedError("not exercised in ingestor_test")
+
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:

@@ -12,8 +12,7 @@ from rich.console import Console
 
 from kentro_server import __version__
 from kentro_server.settings import Settings
-from kentro_server.skills.cache import CachingLLMClient
-from kentro_server.skills.factory import make_llm_client
+from kentro_server.skills.factory import cache_metadata, cache_stats, make_llm_client
 from kentro_server.skills.llm_client import LLMClient
 from kentro_server.store import TenantRegistry
 
@@ -63,17 +62,23 @@ def healthz() -> dict[str, str]:
 
 @app.get("/llm/stats")
 def llm_stats(client: LLMClientDep) -> dict:
-    """Cache hit/miss counters for the running process."""
-    if not isinstance(client, CachingLLMClient):
+    """Cache hit/miss counters for the running process.
+
+    Aggregates counters across the (one or two) `CachingProvider`s wired into
+    the active `DefaultLLMClient`. Returns `cache_enabled=False` when the
+    client has no cache wrapper (e.g. test injections that wire raw Providers).
+    """
+    meta = cache_metadata(client)
+    stats = cache_stats(client)
+    if meta is None or stats is None:
         return {"cache_enabled": False, "stats": None}
-    s = client.stats
     return {
-        "cache_enabled": client.enabled,
-        "cache_dir": str(client.cache_dir),
-        "hits": s.hits,
-        "inner_calls": s.inner_calls,
-        "total": s.total,
-        "hit_rate": round(s.hit_rate, 4),
+        "cache_enabled": meta["enabled"],
+        "cache_dir": meta["cache_dir"],
+        "hits": stats.hits,
+        "inner_calls": stats.inner_calls,
+        "total": stats.total,
+        "hit_rate": round(stats.hit_rate, 4),
     }
 
 

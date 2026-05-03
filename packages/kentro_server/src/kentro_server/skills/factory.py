@@ -1,30 +1,30 @@
-"""Factory: build the right LLMClient for the configured settings.
+"""Factory: build a `DefaultLLMClient` wired to cached `Provider`(s) for the configured settings.
 
-Detects the provider per tier from the model name prefix:
-    "claude-*"  → Anthropic  (requires `ANTHROPIC_API_KEY`)
-    "gemini-*"  → Google     (requires `GOOGLE_API_KEY`)
+Detects the provider per tier from the model-name prefix:
+    "claude-*"  → AnthropicProvider  (requires `ANTHROPIC_API_KEY`)
+    "gemini-*"  → GeminiProvider     (requires `GOOGLE_API_KEY`)
 
-Mixed-provider tiers are supported via `RoutingLLMClient`. Misconfiguration raises
-`LLMConfigError` at startup — never silently falls back to a different provider.
+Mixed-provider tiers are supported by passing two different `Provider`s into
+`DefaultLLMClient`. There is no `RoutingLLMClient` — routing falls out of
+composition. Misconfiguration raises `LLMConfigError` at startup; never
+silently falls back to a different provider.
 
-Always wraps the chosen client(s) in a `CachingLLMClient` honoring
-`KENTRO_LLM_CACHE_ENABLED`.
+Each `Provider` is wrapped in a `CachingProvider` honoring
+`KENTRO_LLM_CACHE_ENABLED`. When fast and smart resolve to the same provider
+type, both tiers share a single cached `Provider` so cache stats aggregate
+naturally and the inner SDK client is built once.
 """
 
 import logging
-from typing import TYPE_CHECKING
 
 from kentro_server.settings import Settings
-from kentro_server.skills.cache import CachingLLMClient
+from kentro_server.skills.cache import CacheStats, CachingProvider
 from kentro_server.skills.llm_client import (
-    ExtractionResult,
+    DefaultLLMClient,
     LLMClient,
     LLMConfigError,
-    SkillResolverDecision,
 )
-
-if TYPE_CHECKING:
-    from kentro_server.store.models import FieldWriteRow
+from kentro_server.skills.provider import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -38,139 +38,117 @@ def detect_provider(model: str) -> str:
     raise LLMConfigError(f"unknown model {model!r}: must start with 'claude-' or 'gemini-'")
 
 
-def make_llm_client(settings: Settings) -> CachingLLMClient:
-    """Build the LLMClient for `settings`. Raises `LLMConfigError` on misconfiguration.
+def make_llm_client(settings: Settings) -> DefaultLLMClient:
+    """Build the `DefaultLLMClient` for `settings`. Raises `LLMConfigError` on misconfiguration.
 
-    Always returns a `CachingLLMClient`. Callers that only need the abstract surface
-    can treat the return as `LLMClient`; tests that introspect `.inner` use the full
-    type. Returning the concrete wrapper here also lets the type checker see the
-    `.stats`, `.enabled`, and `.inner` attributes that consumers already rely on.
+    Always returns `DefaultLLMClient` directly (not the abstract `LLMClient`) so
+    callers that need to introspect `.fast_provider` / `.smart_provider` (the
+    `/llm/stats` endpoint, factory tests) get the concrete type without casts.
     """
-    fast_provider = detect_provider(settings.kentro_llm_fast_model)
-    smart_provider = detect_provider(settings.kentro_llm_smart_model)
+    fast_provider_kind = detect_provider(settings.kentro_llm_fast_model)
+    smart_provider_kind = detect_provider(settings.kentro_llm_smart_model)
 
-    if fast_provider == smart_provider:
-        inner = _build_single(
-            provider=fast_provider,
-            settings=settings,
-            fast_model=settings.kentro_llm_fast_model,
-            smart_model=settings.kentro_llm_smart_model,
-        )
+    fast_provider = _build_cached_provider(provider_kind=fast_provider_kind, settings=settings)
+    if fast_provider_kind == smart_provider_kind:
+        # Same backend serves both tiers → single SDK client + single cache wrapper,
+        # so both tiers' calls show up in one CacheStats.
+        smart_provider: CachingProvider = fast_provider
     else:
-        fast_only = _build_single(
-            provider=fast_provider,
-            settings=settings,
-            fast_model=settings.kentro_llm_fast_model,
-            # smart model on a fast-only client is unused but the constructor wants something:
-            smart_model=settings.kentro_llm_fast_model,
+        smart_provider = _build_cached_provider(
+            provider_kind=smart_provider_kind, settings=settings
         )
-        smart_only = _build_single(
-            provider=smart_provider,
-            settings=settings,
-            fast_model=settings.kentro_llm_smart_model,
-            smart_model=settings.kentro_llm_smart_model,
-        )
-        inner = RoutingLLMClient(fast=fast_only, smart=smart_only)
 
-    cache = CachingLLMClient(
+    client = DefaultLLMClient(
+        fast_provider=fast_provider,
+        smart_provider=smart_provider,
+        fast_model=settings.kentro_llm_fast_model,
+        smart_model=settings.kentro_llm_smart_model,
+    )
+    logger.info(
+        "DefaultLLMClient ready: fast=%s (%s), smart=%s (%s), cache_enabled=%s",
+        settings.kentro_llm_fast_model,
+        fast_provider_kind,
+        settings.kentro_llm_smart_model,
+        smart_provider_kind,
+        settings.kentro_llm_cache_enabled,
+    )
+    return client
+
+
+def _build_cached_provider(*, provider_kind: str, settings: Settings) -> CachingProvider:
+    """Build a `Provider` for `provider_kind`, wrap it in `CachingProvider`."""
+    inner = _build_provider(provider_kind=provider_kind, settings=settings)
+    return CachingProvider(
         inner=inner,
         cache_dir=settings.llm_cache_dir,
         enabled=settings.kentro_llm_cache_enabled,
     )
-    logger.info(
-        "LLMClient ready: fast=%s (%s), smart=%s (%s), cache_enabled=%s",
-        settings.kentro_llm_fast_model,
-        fast_provider,
-        settings.kentro_llm_smart_model,
-        smart_provider,
-        settings.kentro_llm_cache_enabled,
-    )
-    return cache
 
 
-def _build_single(
-    *, provider: str, settings: Settings, fast_model: str, smart_model: str
-) -> LLMClient:
-    if provider == "anthropic":
+def _build_provider(*, provider_kind: str, settings: Settings) -> Provider:
+    if provider_kind == "anthropic":
         if not settings.anthropic_api_key:
             raise LLMConfigError(
-                f"model {fast_model!r}/{smart_model!r} resolves to Anthropic, "
-                "but ANTHROPIC_API_KEY is not set"
+                "kentro_llm_*_model resolves to Anthropic, but ANTHROPIC_API_KEY is not set"
             )
         # Local import keeps the SDK pulled in only when it's actually selected.
-        from kentro_server.skills.anthropic_client import AnthropicLLMClient
+        from kentro_server.skills.anthropic_provider import AnthropicProvider
 
-        return AnthropicLLMClient(
-            api_key=settings.anthropic_api_key,
-            fast_model=fast_model,
-            smart_model=smart_model,
-        )
-    if provider == "google":
+        return AnthropicProvider(api_key=settings.anthropic_api_key)
+    if provider_kind == "google":
         if not settings.google_api_key:
             raise LLMConfigError(
-                f"model {fast_model!r}/{smart_model!r} resolves to Google, "
-                "but GOOGLE_API_KEY is not set"
+                "kentro_llm_*_model resolves to Google, but GOOGLE_API_KEY is not set"
             )
-        from kentro_server.skills.gemini_client import GeminiLLMClient
+        from kentro_server.skills.gemini_provider import GeminiProvider
 
-        return GeminiLLMClient(
-            api_key=settings.google_api_key,
-            fast_model=fast_model,
-            smart_model=smart_model,
-        )
-    raise LLMConfigError(f"unknown provider {provider!r}")
+        return GeminiProvider(api_key=settings.google_api_key)
+    raise LLMConfigError(f"unknown provider {provider_kind!r}")
 
 
-class RoutingLLMClient(LLMClient):
-    """Dispatch fast-tier calls to one client, smart-tier to another.
+def cache_stats(client: LLMClient) -> CacheStats | None:
+    """Aggregate `CacheStats` across the providers wired into `client`.
 
-    Exposes `fast_model` / `smart_model` properties that delegate to the wrapped
-    inner clients. The `CachingLLMClient`'s `_peek_attr` lookup uses these to
-    derive a stable cache key, so a routed client caches identically to a single-
-    provider client.
+    Returns `None` if `client` is not a `DefaultLLMClient` (e.g. an
+    `OfflineLLMClient` in tests) or if no provider is a `CachingProvider`.
+    When fast and smart share the same `CachingProvider` instance (the common
+    single-backend case), counters are reported once — not double-counted.
     """
+    if not isinstance(client, DefaultLLMClient):
+        return None
+    seen: set[int] = set()
+    total = CacheStats()
+    found = False
+    for provider in (client.fast_provider, client.smart_provider):
+        if not isinstance(provider, CachingProvider):
+            continue
+        if id(provider) in seen:
+            continue
+        seen.add(id(provider))
+        total.hits += provider.stats.hits
+        total.inner_calls += provider.stats.inner_calls
+        found = True
+    return total if found else None
 
-    def __init__(self, *, fast: LLMClient, smart: LLMClient) -> None:
-        self.fast = fast
-        self.smart = smart
 
-    @property
-    def fast_model(self) -> str:
-        # Best-effort: surface the inner client's selected model name. If the inner
-        # is itself a router (shouldn't happen) we'd return the inner's `fast_model`.
-        return getattr(self.fast, "fast_model", "<unknown-fast>")
+def cache_metadata(client: LLMClient) -> dict | None:
+    """Return `{enabled, cache_dir}` for the (single) cache wrapper, if there is one.
 
-    @property
-    def smart_model(self) -> str:
-        return getattr(self.smart, "smart_model", "<unknown-smart>")
-
-    def run_skill_resolver(
-        self,
-        *,
-        prompt: str,
-        candidates: "list[FieldWriteRow]",
-        model: str | None = None,
-    ) -> SkillResolverDecision:
-        return self.fast.run_skill_resolver(prompt=prompt, candidates=candidates, model=model)
-
-    def extract_entities(
-        self,
-        *,
-        document_text: str,
-        registered_schemas: list,
-        document_label: str | None = None,
-        model: str | None = None,
-    ) -> ExtractionResult:
-        return self.smart.extract_entities(
-            document_text=document_text,
-            registered_schemas=registered_schemas,
-            document_label=document_label,
-            model=model,
-        )
+    When the two tiers use different `CachingProvider`s (mixed-backend deployment)
+    they always share `cache_dir` and `enabled` because both come from the same
+    `Settings`, so reporting one tier's metadata is accurate for both.
+    """
+    if not isinstance(client, DefaultLLMClient):
+        return None
+    for provider in (client.fast_provider, client.smart_provider):
+        if isinstance(provider, CachingProvider):
+            return {"enabled": provider.enabled, "cache_dir": str(provider.cache_dir)}
+    return None
 
 
 __all__ = [
-    "RoutingLLMClient",
+    "cache_metadata",
+    "cache_stats",
     "detect_provider",
     "make_llm_client",
 ]

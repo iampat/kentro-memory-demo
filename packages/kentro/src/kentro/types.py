@@ -224,9 +224,37 @@ class ReevaluationReport(BaseModel):
     re_resolutions: int = 0
 
 
+class NLIntent(BaseModel):
+    """One atomic rule-change intent identified from a user's plain-English message.
+
+    The first step of NL-to-RuleSet parsing splits the user message into a list of
+    these; the second step compiles each one into a `Rule` variant.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    kind: Literal["field_read", "entity_visibility", "write_permission", "conflict_resolver"]
+    description: str
+
+
 class NLResponse(BaseModel):
+    """Structured result of NL → RuleSet parsing.
+
+    Produced by the `parse_nl_to_ruleset(...)` orchestrator in `kentro_server`.
+    The HTTP route that surfaces it (planned: `POST /rules/parse`) lands in
+    Phase D; until then this type is the *contract* between the in-process
+    parser and its callers (CLI, demo notebooks, the future route handler).
+
+    Multi-step parsing produces this shape:
+      - `parsed_ruleset` carries the rules that compiled successfully.
+      - `intents` is the full list the LLM identified (including those that did
+        not compile).
+      - `notes` is a free-text summary of skipped intents and parse difficulties.
+    """
+
     model_config = ConfigDict(frozen=True)
     parsed_ruleset: RuleSet
+    intents: tuple[NLIntent, ...] = ()
+    notes: str | None = None
     summary: str | None = None
 
 
@@ -297,6 +325,7 @@ __all__ = [
     "IngestionResult",
     "LatestWriteResolverSpec",
     "LineageRecord",
+    "NLIntent",
     "NLResponse",
     "PreferAgentResolverSpec",
     "ReevaluationReport",

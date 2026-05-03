@@ -1,27 +1,40 @@
-"""LLMClient — the single seam through which every kentro-server LLM call goes.
+"""LLMClient — high-level skill API; the layer above `Provider`.
+
+Per `CLAUDE.md` "Dependency injection & composition over inheritance":
+
+    Provider               (low-level: complete(model, system, user, response_model))
+       ↑
+    CachingProvider        (middleware: fingerprints the rendered request)
+       ↑
+    DefaultLLMClient       (composition: loads SKILL.md, formats user, calls Provider)
+       │
+       └─ takes `fast_provider`, `smart_provider` via constructor (DI). Mixed-tier
+          deployments pass two different providers. Single-tier pass the same
+          provider twice.
 
 Per `implementation-handoff.md` §1.4 ("LLM-call discipline"):
-- Structured Pydantic output, always (via `instructor`).
-- Validation retries (up to 3x) on parse failure.
-- Determinism: temperature=0.
+- Structured Pydantic output, always (via `instructor`, inside Provider).
+- Validation retries (up to 3x) on parse failure (Provider's `max_retries`).
+- Determinism: `temperature=0` (hard-coded inside each Provider).
 - No prompt-injection paths (user content stays in the user message slot).
 
-Two concrete clients (`AnthropicLLMClient`, `GeminiLLMClient`) live in their own
-modules; the factory in `skills/factory.py` selects per tier based on the configured
-model name's prefix. The `CachingLLMClient` in `skills/cache.py` wraps either.
-
-Tests use `OfflineLLMClient` as a deterministic stand-in. It is **never used in
-production** — `make_llm_client` raises `LLMConfigError` if no usable backend is
-configured.
+`OfflineLLMClient` is a separate ABC implementation that bypasses Providers
+entirely — used in tests/CI where SkillResolver should gracefully return
+UNRESOLVED instead of raising. Production wiring goes through `DefaultLLMClient`
+backed by real Providers.
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kentro_server.skills.skill_loader import load_skill_markdown
+
 if TYPE_CHECKING:
+    from kentro_server.skills.provider import Provider
     from kentro_server.store.models import FieldWriteRow
 
 logger = logging.getLogger(__name__)
@@ -94,11 +107,64 @@ class ExtractionResult(BaseModel):
     )
 
 
-# === Client protocol ===
+# === NL → RuleSet structured outputs ===
+#
+# Multi-step parse: the user's plain-English message is first split into a list of
+# atomic intents (`identify_nl_intents`), then each intent is compiled separately
+# into a single Rule variant (`parse_nl_rule`). Both calls go through `instructor`,
+# which requires a Pydantic *model* as the response schema — `instructor` cannot
+# bind a bare list as the top-level type. Hence the `_NLIntentList` wrapper.
+#
+# `_ParsedRule.rule_json` is the JSON-serialized Rule (discriminated-union variant),
+# or `None` if the LLM could not compile the intent into a valid rule. The
+# orchestrator validates the JSON against `kentro.types.Rule` and routes failures
+# into `NLResponse.notes` rather than discarding them.
+
+
+class _NLIntentItem(BaseModel):
+    """One atomic intent, mirroring `kentro.types.NLIntent` on the wire side."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str = Field(
+        description=(
+            "One of: field_read, entity_visibility, write_permission, conflict_resolver."
+        ),
+    )
+    description: str = Field(description="The atomic intent in plain English.")
+
+
+class _NLIntentList(BaseModel):
+    """Wrapper model so `instructor` can return a list of intents."""
+
+    model_config = ConfigDict(frozen=True)
+
+    intents: tuple[_NLIntentItem, ...] = ()
+
+
+class _ParsedRule(BaseModel):
+    """Output of compiling a single NL intent into a Rule.
+
+    `rule_json` is the JSON serialization of one `kentro.types.Rule` variant, or
+    `None` when the intent could not be compiled. `reason` is always populated:
+    on success it explains the choice; on failure it explains why the intent
+    was skipped.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    rule_json: str | None = Field(
+        default=None,
+        description="JSON for a single Rule variant, or null when not compilable.",
+    )
+    reason: str = Field(description="Always present — explanation or skip-reason.")
+
+
+# === High-level skill API ===
 
 
 class LLMClient(ABC):
-    """Provider-agnostic structured-output LLM seam."""
+    """Skill-aware façade. Production impl is `DefaultLLMClient`."""
 
     @abstractmethod
     def run_skill_resolver(
@@ -114,19 +180,127 @@ class LLMClient(ABC):
         self,
         *,
         document_text: str,
-        registered_schemas: "list",  # list[EntityTypeDef] — Any to avoid an SDK->server cycle
+        registered_schemas: "list",  # list[EntityTypeDef]
         document_label: str | None = None,
         model: str | None = None,
     ) -> ExtractionResult: ...
+
+    @abstractmethod
+    def identify_nl_intents(
+        self,
+        *,
+        text: str,
+        model: str | None = None,
+    ) -> _NLIntentList: ...
+
+    @abstractmethod
+    def parse_nl_rule(
+        self,
+        *,
+        intent_description: str,
+        intent_kind: str,
+        registered_schemas: "list",  # list[EntityTypeDef]
+        known_agent_ids: tuple[str, ...],
+        model: str | None = None,
+    ) -> _ParsedRule: ...
+
+
+class DefaultLLMClient(LLMClient):
+    """Compose two `Provider`s + the configured tier model names.
+
+    `fast_provider` and `smart_provider` may be the same instance (single-tier
+    deployment) or two different instances (mixed-tier). Either way, neither
+    Provider knows about skills — this class loads `SKILL.md` text, formats
+    the user payload, and hands the rendered request down.
+    """
+
+    def __init__(
+        self,
+        *,
+        fast_provider: "Provider",
+        smart_provider: "Provider",
+        fast_model: str,
+        smart_model: str,
+    ) -> None:
+        self.fast_provider = fast_provider
+        self.smart_provider = smart_provider
+        self.fast_model = fast_model
+        self.smart_model = smart_model
+
+    def run_skill_resolver(
+        self,
+        *,
+        prompt: str,
+        candidates: "list[FieldWriteRow]",
+        model: str | None = None,
+    ) -> SkillResolverDecision:
+        return self.fast_provider.complete(
+            model=model or self.fast_model,
+            system=load_skill_markdown("skill_resolver"),
+            user=_format_skill_user(prompt, candidates),
+            response_model=SkillResolverDecision,
+        )
+
+    def extract_entities(
+        self,
+        *,
+        document_text: str,
+        registered_schemas: list,
+        document_label: str | None = None,
+        model: str | None = None,
+    ) -> ExtractionResult:
+        return self.smart_provider.complete(
+            model=model or self.smart_model,
+            system=load_skill_markdown("extract_entities"),
+            user=_format_extract_user(document_text, registered_schemas, document_label),
+            response_model=ExtractionResult,
+        )
+
+    def identify_nl_intents(
+        self,
+        *,
+        text: str,
+        model: str | None = None,
+    ) -> _NLIntentList:
+        return self.fast_provider.complete(
+            model=model or self.fast_model,
+            system=load_skill_markdown("nl_intents"),
+            user=f"USER MESSAGE:\n{text}",
+            response_model=_NLIntentList,
+        )
+
+    def parse_nl_rule(
+        self,
+        *,
+        intent_description: str,
+        intent_kind: str,
+        registered_schemas: list,
+        known_agent_ids: tuple[str, ...],
+        model: str | None = None,
+    ) -> _ParsedRule:
+        agents_block = ", ".join(known_agent_ids) if known_agent_ids else "(none)"
+        user = (
+            f"INTENT KIND: {intent_kind}\n"
+            f"INTENT: {intent_description}\n\n"
+            f"REGISTERED SCHEMA:\n{_render_schema_block(registered_schemas)}\n\n"
+            f"KNOWN AGENT IDS: {agents_block}"
+        )
+        return self.fast_provider.complete(
+            model=model or self.fast_model,
+            system=load_skill_markdown("nl_to_rule"),
+            user=user,
+            response_model=_ParsedRule,
+        )
 
 
 class OfflineLLMClient(LLMClient):
     """Test/CI stand-in. Never used in production — `make_llm_client` raises instead.
 
-    `run_skill_resolver` returns UNRESOLVED with an explanatory reason (this is the
-    same behavior Step 5 relied on, so existing tests keep working). `extract_entities`
-    raises `LLMOfflineError` — extraction has no graceful-degradation path, callers
-    should mock with a fake that returns canned data.
+    `run_skill_resolver` returns UNRESOLVED with an explanatory reason (this is
+    how Step 5 `resolve()` exercises the AutoResolver → SkillResolver dispatch
+    path without a real LLM). The other three methods raise `LLMOfflineError` —
+    they have no graceful-degradation path, so callers must mock with a fake
+    that returns canned data.
     """
 
     _UNAVAILABLE_REASON = "LLM client offline (no backend configured)"
@@ -143,13 +317,74 @@ class OfflineLLMClient(LLMClient):
 
     def extract_entities(
         self, *, document_text, registered_schemas, document_label=None, model=None
-    ):
+    ) -> ExtractionResult:
         raise LLMOfflineError(
             "OfflineLLMClient.extract_entities called — extraction requires a real LLM backend"
         )
 
+    def identify_nl_intents(self, *, text, model=None) -> _NLIntentList:
+        raise LLMOfflineError(
+            "OfflineLLMClient.identify_nl_intents called — NL parsing requires a real LLM backend"
+        )
+
+    def parse_nl_rule(
+        self, *, intent_description, intent_kind, registered_schemas, known_agent_ids, model=None
+    ) -> _ParsedRule:
+        raise LLMOfflineError(
+            "OfflineLLMClient.parse_nl_rule called — NL parsing requires a real LLM backend"
+        )
+
+
+# === Prompt formatters ===
+#
+# Provider-agnostic helpers — used by `DefaultLLMClient` only. Kept as
+# module-level functions (not methods) so the same renderer is bit-for-bit
+# identical regardless of which Provider serves the request, which keeps the
+# cache key stable.
+
+
+def _format_skill_user(policy: str, candidates: "list[FieldWriteRow]") -> str:
+    rendered_candidates = []
+    for c in candidates:
+        rendered_candidates.append(
+            {
+                "agent_id": c.written_by_agent_id,
+                "written_at": c.written_at.isoformat(),
+                "source_document_id": str(c.source_document_id) if c.source_document_id else None,
+                "value_json": c.value_json,
+            }
+        )
+    return f"POLICY:\n{policy}\n\nCANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
+
+
+def _format_extract_user(
+    document_text: str,
+    registered_schemas: list,
+    document_label: str | None,
+) -> str:
+    header = f"DOCUMENT LABEL: {document_label}\n" if document_label else ""
+    return (
+        f"REGISTERED SCHEMA:\n{_render_schema_block(registered_schemas)}\n\n"
+        f"{header}DOCUMENT:\n{document_text}"
+    )
+
+
+def _render_schema_block(registered_schemas: list) -> str:
+    """Pretty-print `EntityTypeDef`s into a block the LLM can match field names against."""
+    chunks: list[str] = []
+    for td in registered_schemas:
+        chunks.append(f"- {td.name}:")
+        for f in td.fields:
+            if f.deprecated:
+                # Don't even mention deprecated fields to the extractor.
+                continue
+            default = f" (default: {f.default_json})" if f.default_json else ""
+            chunks.append(f"    * {f.name}: {f.type_str}{default}")
+    return "\n".join(chunks)
+
 
 __all__ = [
+    "DefaultLLMClient",
     "ExtractedEntity",
     "ExtractedField",
     "ExtractionResult",
@@ -158,4 +393,7 @@ __all__ = [
     "LLMOfflineError",
     "OfflineLLMClient",
     "SkillResolverDecision",
+    "_NLIntentItem",
+    "_NLIntentList",
+    "_ParsedRule",
 ]

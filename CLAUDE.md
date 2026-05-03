@@ -30,6 +30,60 @@ subclass at that point. Don't pre-emptively duplicate.
 
 **When divergence is approved**, record it in `CHANGE_LOG.md` AND update the corresponding section of `implementation-handoff.md` AND `IMPLEMENTATION_PLAN.md` so the spec stays the single source of truth. The plan and log are not allowed to drift from the handoff.
 
+## Dependency injection &amp; composition over inheritance
+
+When a piece of behavior needs to swap (different LLM provider, real-vs-fake DB,
+different cache backend), reach for **composition + dependency injection** before
+you reach for "make X an ABC and write a subclass per variant."
+
+The canonical example in this repo is the LLM stack:
+
+```
+Provider (ABC)            ← low-level: complete(model, system, user, response_model)
+  ├─ AnthropicProvider
+  ├─ GeminiProvider
+  └─ OfflineProvider
+
+CachingProvider(Provider)  ← middleware: wraps a Provider, fingerprints the request
+                              (model + system + user + response_class) and caches.
+
+LLMClient (ABC)            ← high-level skill API (run_skill_resolver, extract_entities, …)
+
+DefaultLLMClient(LLMClient) ← composes Providers via DI:
+  __init__(*, fast_provider: Provider, smart_provider: Provider,
+           fast_model: str, smart_model: str)
+  - loads SKILL.md, formats user, calls the appropriate provider
+```
+
+Why this layering matters:
+
+- **The cache key naturally describes the actual LLM request.** Because
+  `CachingProvider` sits *under* the prompt-building layer, its fingerprint
+  includes the rendered system prompt — which means editing a `SKILL.md` file
+  changes the system text → changes the key → forces a fresh call. We never
+  have to maintain a "method → skill file" lookup table inside the cache.
+- **Mixed providers fall out of composition.** Want fast=Anthropic +
+  smart=Gemini? Pass two different `Provider`s to `DefaultLLMClient`. No
+  `RoutingLLMClient` subclass required.
+- **Tests don't need real SDKs.** A `FakeProvider` with a counter
+  replaces the inner provider; the same `CachingProvider` and
+  `DefaultLLMClient` surround it.
+- **No hidden inputs in the cached call.** Anything that influences the LLM
+  must pass through the provider's `complete(...)` arguments. If a future
+  feature needs to add tools/temperature/system-suffix, it's added there and
+  the cache picks it up automatically.
+
+**Heuristic:** if you find yourself writing two near-identical subclasses that
+differ only in *what they call* or *what they wrap*, stop and refactor to a
+shared concrete class that takes the variant as a constructor parameter. The
+mental test: "if I need to add a third variant, do I need to write a new
+subclass, or can I just instantiate the existing class with different args?"
+The second answer is the goal.
+
+This is the same impulse as the **No singletons** rule below — both are about
+keeping state and behavior **explicit at the call site** rather than hidden
+in module/class globals.
+
 ## No singletons
 
 Do not introduce module-level singletons (`_singleton: T | None = None` patterns or
