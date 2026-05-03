@@ -209,6 +209,11 @@ Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` o
 
 `AdminClient` / `AgentClient` (sync only for v0). `httpx.Client`, typed errors, no business logic.
 
+**Lock-in for this step (per Decision 2 above):**
+- Land `core/rules.py::ruleset_diff(old, new)` and `core/rules.py::render_rule(r)` server-side; re-export through the SDK so Step 10's UI is thin.
+- `AdminClient` exposes `apply_ruleset`, `parse_nl_to_ruleset`, `get_active_ruleset` 1:1 with the routes — no hidden role logic in the client. The client returns the same typed `RuleSet` and `NLResponse` the routes return.
+- The `is_admin` distinction is reflected as a runtime exception (`AdminRequiredError`) raised when the server returns 403, not as separate client classes per role. Single `Client` constructor takes the api_key; admin-ness is the server's call.
+
 **What was built:** _pending_
 
 ---
@@ -218,6 +223,11 @@ Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` o
 **Status:** `pending`
 
 `viz.access_matrix`, `viz.entity_graph`, `viz.lineage`, `viz.conflicts`, `viz.rule_diff`. Mirror in `viz_cli.*` for the typer CLI.
+
+**Lock-in for this step (per Decision 2 above):**
+- `viz.access_matrix(ruleset, agents, entities) -> Matrix` — the data shape behind Step 10's right-pane default view. Rows = agents, cols = (entity_type, field_name), cells = `{"read": "allow"|"deny"|"hidden", "write": "allow"|"deny"}`. UI consumes; CLI prints.
+- `viz.rule_diff(old, new)` — wraps `core/rules.py::ruleset_diff()` (lands in Step 8) for human-friendly rendering: grouped by rule type, color-coded `+`/`−`. Used by both the right-pane diff highlights and the `kentro-server rules diff vN vM` CLI.
+- `viz.conflicts(store)` — list of `(entity_type, field_name)` with open `ConflictRow`s + the resolver currently in effect for each. Surfaces the demo's "two writes disagree, here's how it'll resolve" beat.
 
 **What was built:** _pending_
 
@@ -230,6 +240,15 @@ Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` o
 Lock-in change vs handoff: **no Vercel.** The UI ships as a static build that `kentro-server` serves via FastAPI `StaticFiles`.
 
 Open sub-decision (resolve at the start of Step 10): keep Next.js with `output: 'export'` (static export) OR drop Next.js for Vite + React + Tailwind + shadcn/ui (lighter, no SSR/middleware features we'd be losing). Recommendation: Vite — Next.js's SSR is value we don't use here, and the static-export path is friction we don't need.
+
+**Policy editor design (locked per Decision 2 above):**
+
+Two-pane layout for the rules-editing screen.
+
+- **Left pane — NL chat.** Admin types plain English. UI calls `POST /rules/parse`, displays the compiled `parsed_ruleset` + `intents` + `notes`. "Apply" calls `POST /rules/apply`, version bumps.
+- **Right pane — structured policy view.** Default rendering is the access matrix from `viz.access_matrix()`. A collapsible panel below shows the sectioned-by-rule-type detail (one section per `FieldReadRule` / `EntityVisibilityRule` / `WriteRule` / `ConflictRule`). Header shows `version N · applied <when> by <who> · summary`. On apply, the right pane re-renders with the new structure and the changed rows highlight (added green `+`, removed red `−`) using `viz.rule_diff()`.
+
+Critical: this is NOT a JSON editor and NOT a PBAC-language editor. The structured view IS the language — it makes the four-rule-type model visible as architecture, not as a config blob. See Decision 2.6 for the rationale.
 
 **What was built:** _pending_
 
@@ -273,6 +292,73 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 ## Decisions locked since the handoff
 
 1. **Kentro ↔ Witchcraft integration: subprocess wrapper around `warp-cli` for v0.** Verified working end-to-end on Mac (CHANGE_LOG 2026-05-02). Per-doc `add` is append-to-TSV + `readcsv → embed → index` (incremental on the embed/index side). Per-doc `remove` is wipe-and-re-ingest at demo scale (~200ms for 6 docs). PyO3 binding deferred to v0.1. Rationale: zero new toolchain in kentro's build, no Rust in CI/deploy, simple ops story. Handoff unchanged — implementation detail only.
+
+2. **ACL governance model — locked 2026-05-03.** Full design walkthrough captured because it shapes Steps 8 (SDK), 9 (viz), 10 (UI), and the demo narrative. Discussion lived in the conversation; outcomes locked here.
+
+   ### 2.1 Rule types — keep the four already in `kentro.types`
+
+   `FieldReadRule`, `EntityVisibilityRule`, `WriteRule`, `ConflictRule`. No new rule types for v0. Each rule is a tuple over (`agent_id`, `entity_type`, optionally `field_name`/`entity_key`) → allow/deny (or, for `ConflictRule`, → `ResolverSpec`). `WriteRule` carries `requires_approval: bool` (treated as deny in v0; the flag survives for a future approval workflow).
+
+   The four cover every demo beat: redact field from agent (`FieldReadRule`), hide entity from agent (`EntityVisibilityRule`), block write (`WriteRule`), pick winner on conflict (`ConflictRule`).
+
+   ### 2.2 Conflict rules stay separate from access rules
+
+   Semantically different concerns. Access = "who is allowed to do this." Conflict = "when sources disagree, which one wins." Conflating them would muddy both surfaces (matrix view, NL parser, SDK). The `ConflictRule` carries a `ResolverSpec` (raw / latest_write / prefer_agent / skill / auto), which is its own discriminated union — no overlap with allow/deny.
+
+   ### 2.3 Admin model: `is_admin: bool` is omnipotent for v0
+
+   One boolean role. Admins gate the control plane (`POST /rules/apply`, `POST /schema/register`, `DELETE /documents/{id}`); non-admins can only do data-plane reads/writes that the active ruleset permits. No granular permissions ("can edit rules but not schema"), no role taxonomy, no group resolution. Hand-rolled per-(tenant, agent) keys in `tenants.json` are the v0 user-management story. Granular permissions and group resolution are v0.1 follow-ups.
+
+   ### 2.4 No PBAC language (Cedar / OPA Rego / Casbin)
+
+   **Rejected** for v0. Reasons:
+   - The four rule types are pure tuples, not predicates — adopting a predicate-based syntax to express tuple rules is dressing RBAC in PBAC clothes.
+   - Adding a Cedar/Rego layer means three compile steps (NL → DSL → typed Rule) instead of two (NL → typed Rule). The middle step is something to *explain* to the audience, not something they find impressive.
+   - The typed `RuleSet` IS already a strict, machine-checkable, human-readable contract. Choosing JSON over Cedar syntax is a presentation decision, not an architecture one.
+   - Locks us into someone else's evolution path (Cedar = AWS, OPA = CNCF) for marginal gain.
+
+   v0.1 conversation: if the demo script later requires a predicate (e.g. "Sales can read deal_size *only if* deal_size < $100K"), add an optional `condition: Predicate | None` field to the typed rule classes plus a small expression evaluator. Stays in the typed-Pydantic world; doesn't pull in an external runtime.
+
+   ### 2.5 Admin editing surface — TWO panes, not raw JSON
+
+   The admin's policy-editing experience is **two affordances side-by-side**, both compiling down to the same four typed rule classes:
+
+   1. **NL chat (left pane).** Admin types plain English ("redact deal_size from sales"). `parse_nl_to_ruleset` returns `NLResponse(parsed_ruleset, intents, notes)`. Admin previews the compiled rules + the splitter notes (any unclassifiable input is surfaced, not dropped). Click "Apply" → `POST /rules/apply` bumps the version.
+
+   2. **Structured policy view (right pane).** Renders the active `RuleSet` as a structured, sectioned, human-readable view — NOT a JSON blob. Default rendering = an **access matrix** (rows=agents, cols=fields, cells=read/write/visibility status); below it, a **sectioned-by-rule-type panel** for the audit detail (one section per rule type, each with columns and icons).
+
+   When the admin clicks "Apply" in the chat, the right pane updates with the new structure and the changed rows highlight (added = green `+`, removed = red `−`). The before/after diff between rule versions is visible in real time.
+
+   ### 2.6 Why structured-view, not JSON, not a PBAC syntax
+
+   - JSON blob → reads like a config file. Doesn't communicate that the system has a *model*.
+   - PBAC syntax (Cedar/Rego style) → looks "enterprise-grade" but obscures the model rather than revealing it; the audience sees a string they have to parse, not an architecture diagram.
+   - Structured view → makes the model itself visible: four rule categories, agents × entities × fields as the access matrix, conflict policies as a separate domain. That's an architecture diagram of governance, rendered live. PBAC syntax can't do that.
+
+   Three details that sell "enterprise" without a DSL:
+
+   - **Sectioned by rule type.** Four collapsible sections, each with headers and iconography.
+   - **Per-version provenance.** Version number, timestamp, applier identity, free-text summary — sourced from `RuleVersionRow`. Auditability is what enterprise watchers actually care about; PBAC engines sell it as "decision provenance," we get it from the existing schema.
+   - **Diff highlights between versions.** `+` for added rules, `−` for removed; the relationship between the NL prompt and the policy structure is *visible*.
+
+   ### 2.7 Server-side helpers needed (lands in Step 8 or 9)
+
+   The UI in Step 10 should be thin. To keep it that way, two small helpers should ship server-side and be exposed via the SDK:
+
+   - **`ruleset_diff(old: RuleSet, new: RuleSet) -> RuleSetDiff`** — returns `{added, removed, unchanged}` as tuples of `Rule`. Pure function, ~30 lines. Useful for the UI's diff highlights AND for the `kentro-server rules diff` CLI.
+   - **`render_rule(r: Rule) -> str`** — one-line text rendering, e.g. `"sales reads Customer.deal_size [deny]"` or `"⚖ Customer.deal_size → SkillResolver: 'written outweighs verbal'"`. Useful for CLI output, audit logs, and as a fallback when the matrix view doesn't fit.
+
+   Both belong in `kentro_server.core.rules` (next to `apply_ruleset` / `load_active_ruleset`). Both should be re-exported through the SDK so notebooks and the UI use the same renderer.
+
+   ### 2.8 v0.1 backlog explicitly deferred
+
+   Not in v0; revisit when the demo or a customer asks. Listing them so the conversation doesn't have to start from scratch:
+
+   - **Wildcards on `agent_id`** (`*` for "everyone"). Cheapest add (~10 lines in ACL eval). Worth doing if the audience asks "what about role-based?" mid-demo.
+   - **Group / role resolution.** Add a `Group` config model + name expansion in ACL eval. Medium-cost; only if real customers complain about hand-rolling rules per agent.
+   - **Predicate-based rules.** Optional `condition: Predicate` on each rule class + tiny expression evaluator. The first thing to ship if a customer needs row-level/value-based policy.
+   - **Granular admin permissions.** Replace `is_admin: bool` with `permissions: list[Literal["rules.write", "schema.write", "documents.delete", ...]]`. For v0 with one admin, the boolean is enough.
+   - **`Note.subject` placeholder cleanup** — see Step 7 post-merge follow-ups.
 
 ---
 
