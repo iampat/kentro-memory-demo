@@ -117,7 +117,7 @@ Tests:
 
 ## Step 6 — Ingestion & entity extraction
 
-**Status:** `done`
+**Status:** `done` (extended in the gap-fill PR with schema-aware extraction prompts)
 
 LLM infrastructure (`packages/kentro_server/src/kentro_server/`):
 - `settings.py` — pydantic-settings reading `.env` (anthropic + google keys, fast/smart model names, cache toggle, state dir, host/port).
@@ -206,6 +206,17 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 
 ---
 
+## Deferred to the very end
+
+- **Continuous integration.** No GitHub Actions / no remote test runner today. Manual
+  `uv run pytest tests/unit/` before every PR push is the substitute, codified in
+  CLAUDE.md ("Run tests before opening or updating a PR"). Wire CI in the final
+  cleanup pass after Step 12 ships.
+- **End-to-end smoke test in CI.** `tests/integration/end_to_end_smoke_test.py` makes
+  real Anthropic calls when `ANTHROPIC_API_KEY` is set; it is `pytest.skip`'d in CI.
+  Once CI is wired, decide whether to plumb the API key through (cost!) or run the
+  smoke test on a separate scheduled job. Do not block on this until then.
+
 ## Open questions / decisions awaiting input
 
 1. **Linux x86_64 Witchcraft build** — unverified locally. QEMU emulation in podman segfaults Rust binaries (TLS issue); Rosetta isn't wired up by this podman version. Two paths: validate on a real GCP e2-medium VM now (~$0.05, ~30 min, definitive) or defer to Step 12. Currently deferred per user direction ("leave aside for now"). Will re-raise before Step 12.
@@ -219,3 +230,11 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 ## Resolved tech debt
 
 - **Module-level singletons retired (2026-05-03).** `get_settings()` / `reset_settings_for_tests()` removed from `settings.py`; `get_llm_client()` / `reset_llm_client_for_tests()` removed from `skills/factory.py`. Replaced with a FastAPI lifespan handler (`@asynccontextmanager`) that constructs `Settings`, `LLMClient`, and `StoreRegistry` once at startup and attaches them to `app.state`. Routes consume them via `Annotated[T, Depends(...)]` aliases (`SettingsDep`, `LLMClientDep`, `StoreRegistryDep`). The `start` CLI command constructs `Settings()` directly (it's not in a request context). 63/63 unit tests still pass with no test changes. See branch `retire-singletons`.
+- **Codex hardening findings closed (2026-05-03).** (1) Tenant IDs are now validated against `^[A-Za-z0-9_-]+$` and the resolved tenant directory must stay under `state_root`; (2) `FilesystemBlobStore` uses `Path.is_relative_to` and rejects absolute keys; (3) `EntityRow` has a `UNIQUE(type, key)` constraint and `_get_or_create_entity_id` retries via SAVEPOINT on `IntegrityError` so concurrent ingests can't fragment an entity. New tests cover all three. See the gap-fill PR.
+
+## Big gaps closed (2026-05-03 — gap-fill PR)
+
+- **Tenancy formalized.** `<repo>/tenants.json` (Pydantic-typed `TenantsConfig`) is the source of truth; `TenantRegistry.from_paths(state_dir, config_path)` loads it at app startup and creates a default `local` tenant on first run. Per-tenant directory is `<state_dir>/<tenant_id>/{state.sqlite, docs/, witchcraft/}`. API key → tenant resolution available via `TenantRegistry.by_api_key()`. Replaces the lazy-create `StoreRegistry`.
+- **Schema registry.** `kentro.types.EntityTypeDef` + `FieldDef` carry the wire shape. `kentro.schema.entity_type_def_from(cls)` introspects a `kentro.Entity` subclass into the wire form. Server-side `SchemaRegistry` persists these as `SchemaTypeRow`. The extractor's `extract_entities` now takes `registered_schemas: list[EntityTypeDef]` and the LLM prompt includes the field declarations so it emits canonical field names with values typed correctly (e.g. `deal_size: float` → JSON number).
+- **Synthetic corpus generated.** 8 markdown files at `examples/synthetic_corpus/` produced by `scripts/generate_corpus.py` against real Anthropic (cached). The `acme_call`/`email_jane` pair is the demo's $250K/$300K conflict scenario; the two `ali_meeting_note` files are the multi-document hydration scenario.
+- **End-to-end smoke test.** `tests/integration/end_to_end_smoke_test.py` walks the full demo: register schemas → ingest the call → ingest the email → assert conflict recorded → AutoResolver default → AutoResolver+SkillResolver → source-delete the email → fall-back to $250K. Skipped without `ANTHROPIC_API_KEY`. Cached calls make re-runs ~11s.

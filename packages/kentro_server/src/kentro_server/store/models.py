@@ -15,6 +15,7 @@ Conventions:
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -48,6 +49,7 @@ class EntityRow(SQLModel, table=True):
     """An entity instance — uniquely identified by (type, key) per strict-key resolution."""
 
     __tablename__ = "entity"
+    __table_args__ = (UniqueConstraint("type", "key", name="uq_entity_type_key"),)
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     type: str = Field(index=True)
@@ -119,6 +121,22 @@ class RuleRow(SQLModel, table=True):
     payload_json: str
 
 
+class SchemaTypeRow(SQLModel, table=True):
+    """One registered entity type with its declared field shape, per tenant.
+
+    The server stores the SDK-provided `EntityTypeDef` (name + list of `FieldDef`s)
+    serialized as JSON. The ingestor's `registered_entity_types` list is derived from
+    this table, and future field-shape validation can read `definition_json` here.
+    """
+
+    __tablename__ = "schema_type"
+    __table_args__ = (UniqueConstraint("name", name="uq_schema_type_name"),)
+
+    name: str = Field(primary_key=True)
+    definition_json: str
+    registered_at: datetime = Field(default_factory=_now_utc)
+
+
 class ExtractionStepRow(SQLModel, table=True):
     """Telemetry for a single LLM call made during ingestion."""
 
@@ -144,4 +162,5 @@ __all__ = [
     "FieldWriteRow",
     "RuleRow",
     "RuleVersionRow",
+    "SchemaTypeRow",
 ]

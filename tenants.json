@@ -1,0 +1,9 @@
+{
+  "tenants": [
+    {
+      "id": "local",
+      "display_name": "Local Dev",
+      "api_key": "local-dev-key-do-not-share"
+    }
+  ]
+}

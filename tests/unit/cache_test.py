@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from kentro.types import EntityTypeDef, FieldDef
 from kentro_server.skills.cache import CachingLLMClient
 from kentro_server.skills.llm_client import (
     ExtractedEntity,
@@ -17,6 +18,10 @@ from kentro_server.skills.llm_client import (
     SkillResolverDecision,
 )
 from kentro_server.store.models import FieldWriteRow
+
+
+def _customer_schema() -> EntityTypeDef:
+    return EntityTypeDef(name="Customer", fields=(FieldDef(name="name", type_str="str"),))
 
 
 @dataclass
@@ -45,7 +50,7 @@ class _CountingLLM(LLMClient):
         self.skill_calls += 1
         return self.skill_decision
 
-    def extract_entities(self, *, document_text, registered_entity_types, document_label=None, model=None):
+    def extract_entities(self, *, document_text, registered_schemas, document_label=None, model=None):
         self.extract_calls += 1
         return self.extraction_result
 
@@ -120,13 +125,13 @@ def test_extract_entities_is_cached_separately(cache_dir: Path) -> None:
 
     cache.extract_entities(
         document_text="Acme call notes — renewal at $250K",
-        registered_entity_types=["Customer"],
+        registered_schemas=[_customer_schema()],
         document_label="acme_call.md",
         model="claude-sonnet-4-6",
     )
     cache.extract_entities(
         document_text="Acme call notes — renewal at $250K",
-        registered_entity_types=["Customer"],
+        registered_schemas=[_customer_schema()],
         document_label="acme_call.md",
         model="claude-sonnet-4-6",
     )
@@ -150,5 +155,5 @@ def test_offline_extract_raises(cache_dir: Path) -> None:
     cache = CachingLLMClient(inner=OfflineLLMClient(), cache_dir=cache_dir)
     with pytest.raises(LLMOfflineError):
         cache.extract_entities(
-            document_text="x", registered_entity_types=["Customer"], model="claude-sonnet-4-6",
+            document_text="x", registered_schemas=[_customer_schema()], model="claude-sonnet-4-6",
         )

@@ -15,7 +15,7 @@ from kentro_server.settings import Settings
 from kentro_server.skills.cache import CachingLLMClient
 from kentro_server.skills.factory import make_llm_client
 from kentro_server.skills.llm_client import LLMClient
-from kentro_server.store import StoreRegistry
+from kentro_server.store import TenantRegistry
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -26,13 +26,14 @@ async def lifespan(app: FastAPI):
     settings = Settings()
     app.state.settings = settings
     app.state.llm_client = make_llm_client(settings)
-    app.state.store_registry = StoreRegistry(settings.kentro_state_dir)
+    app.state.tenant_registry = TenantRegistry.from_paths(
+        state_dir=settings.kentro_state_dir,
+        config_path=settings.kentro_tenants_json,
+    )
     try:
         yield
     finally:
-        # Best-effort cleanup. Iterate a copy because dispose() may not be re-entrant.
-        for store in list(app.state.store_registry._stores.values()):
-            store.dispose()
+        app.state.tenant_registry.dispose_all()
 
 
 app = FastAPI(title="kentro-server", version=__version__, lifespan=lifespan)
@@ -46,13 +47,13 @@ def get_llm_client(request: Request) -> LLMClient:
     return request.app.state.llm_client
 
 
-def get_store_registry(request: Request) -> StoreRegistry:
-    return request.app.state.store_registry
+def get_tenant_registry(request: Request) -> TenantRegistry:
+    return request.app.state.tenant_registry
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
-StoreRegistryDep = Annotated[StoreRegistry, Depends(get_store_registry)]
+TenantRegistryDep = Annotated[TenantRegistry, Depends(get_tenant_registry)]
 
 
 @app.get("/healthz")

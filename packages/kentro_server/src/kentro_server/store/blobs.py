@@ -39,9 +39,14 @@ class FilesystemBlobStore(BlobStore):
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
+        # Reject absolute keys outright — keys must be relative paths within the store.
+        if Path(key).is_absolute():
+            raise ValueError(f"blob key must be a relative path, got absolute: {key!r}")
+        root_resolved = self.root.resolve()
         path = (self.root / key).resolve()
-        # Defense-in-depth: refuse keys that escape the root via "../"
-        if not str(path).startswith(str(self.root.resolve())):
+        # `is_relative_to` does proper path containment (3.9+); the previous
+        # str.startswith check would falsely allow `/state/docs2/x` for root `/state/docs`.
+        if not path.is_relative_to(root_resolved):
             raise ValueError(f"blob key escapes store root: {key!r}")
         return path
 

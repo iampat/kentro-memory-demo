@@ -223,6 +223,24 @@ class NLResponse(BaseModel):
     summary: str | None = None
 
 
+class FieldDef(BaseModel):
+    """One declared field on an `Entity` subclass."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    type_str: str
+    required: bool = True
+    default_json: str | None = None
+
+
+class EntityTypeDef(BaseModel):
+    """Wire-form description of a registered entity type."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    fields: tuple[FieldDef, ...] = ()
+
+
 class Entity(BaseModel):
     """Base class for user-declared entity schemas.
 
@@ -243,8 +261,10 @@ __all__ = [
     "ConflictRule",
     "Entity",
     "EntityRecord",
+    "EntityTypeDef",
     "EntityVisibilityRule",
     "ExtractionStep",
+    "FieldDef",
     "FieldReadRule",
     "FieldStatus",
     "FieldValue",

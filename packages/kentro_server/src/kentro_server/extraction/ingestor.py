@@ -22,6 +22,7 @@ import logging
 import time
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from kentro.types import (
@@ -52,22 +53,32 @@ def ingest_document(
     llm: LLMClient,
     content: bytes,
     label: str | None,
-    registered_entity_types: list[str],
+    registered_schemas: list,
     written_by_agent_id: str,
     rule_version: int,
     smart_model: str,
 ) -> IngestionResult:
-    """Ingest one document end-to-end. Returns the SDK-shaped `IngestionResult`."""
+    """Ingest one document end-to-end. Returns the SDK-shaped `IngestionResult`.
+
+    `registered_schemas` is a list of `kentro.types.EntityTypeDef` (typed loosely
+    here to avoid the SDK→server import); the LLM sees the full field declarations
+    so it emits canonical field names with values matching the declared types.
+    """
     text = content.decode("utf-8")
     content_hash = hashlib.sha256(content).hexdigest()
     doc_id = uuid4()
     blob_key = f"{doc_id}.md"
     store.blobs.put(blob_key, content)
 
+    registered_names = {td.name for td in registered_schemas}
+    registered_fields_by_type: dict[str, set[str]] = {
+        td.name: {f.name for f in td.fields} for td in registered_schemas
+    }
+
     started = time.perf_counter()
     extraction = llm.extract_entities(
         document_text=text,
-        registered_entity_types=registered_entity_types,
+        registered_schemas=registered_schemas,
         document_label=label,
         model=smart_model,
     )
@@ -113,7 +124,7 @@ def ingest_document(
         session.flush()
 
         for ext_entity in extraction.entities:
-            if ext_entity.entity_type not in registered_entity_types:
+            if ext_entity.entity_type not in registered_names:
                 logger.warning(
                     "ingestor: extractor returned unregistered entity_type=%r — skipping",
                     ext_entity.entity_type,
@@ -123,8 +134,15 @@ def ingest_document(
             entity_id = _get_or_create_entity_id(
                 session, entity_type=ext_entity.entity_type, key=ext_entity.key,
             )
+            allowed_fields = registered_fields_by_type.get(ext_entity.entity_type, set())
             field_values: dict[str, FieldValue] = {}
             for ef in ext_entity.fields:
+                if allowed_fields and ef.field_name not in allowed_fields:
+                    logger.warning(
+                        "ingestor: extractor returned unregistered field %s.%s — skipping",
+                        ext_entity.entity_type, ef.field_name,
+                    )
+                    continue
                 write, _conflict = record_field_write(
                     session,
                     entity_id=entity_id,
@@ -166,7 +184,15 @@ def ingest_document(
 
 
 def _get_or_create_entity_id(session, *, entity_type: str, key: str):
-    """Strict-key lookup: one EntityRow per (type, key). Per memory.md v0 decision."""
+    """Strict-key get-or-create: one EntityRow per (type, key).
+
+    Race-safe under the `uq_entity_type_key` UNIQUE constraint: if two concurrent
+    callers both miss the initial SELECT and both INSERT, the second INSERT raises
+    `IntegrityError`; we roll back to a SAVEPOINT and re-SELECT to find the winner.
+
+    Without the constraint + retry, the system would silently split one logical entity
+    into two rows under retries / concurrent ingest, fragmenting conflict detection.
+    """
     existing = session.exec(
         select(EntityRow).where(
             EntityRow.type == entity_type,
@@ -175,9 +201,25 @@ def _get_or_create_entity_id(session, *, entity_type: str, key: str):
     ).first()
     if existing is not None:
         return existing.id
+
     new_entity = EntityRow(type=entity_type, key=key)
     session.add(new_entity)
-    session.flush()
+    try:
+        # SAVEPOINT so the IntegrityError doesn't poison the outer transaction.
+        with session.begin_nested():
+            session.flush()
+    except IntegrityError:
+        # Lost the race — another writer beat us to the insert. Find their row.
+        winner = session.exec(
+            select(EntityRow).where(
+                EntityRow.type == entity_type,
+                EntityRow.key == key,
+            )
+        ).first()
+        if winner is None:
+            # Should be unreachable: IntegrityError on this UNIQUE means a row exists.
+            raise
+        return winner.id
     return new_entity.id
 
 

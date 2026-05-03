@@ -223,6 +223,31 @@ class NLResponse(BaseModel):
     summary: str | None = None
 
 
+# === Schema registration (sent by admin.schema.register) ===
+
+class FieldDef(BaseModel):
+    """One declared field on an `Entity` subclass.
+
+    `type_str` is the Python annotation as a string (e.g. `"str"`, `"float | None"`,
+    `"list[str]"`). v0 stores it for documentation + future validation; the server does
+    not currently validate extracted values against the type.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    type_str: str
+    required: bool = True
+    default_json: str | None = None
+
+
+class EntityTypeDef(BaseModel):
+    """Wire-form description of a registered entity type."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str
+    fields: tuple[FieldDef, ...] = ()
+
+
 # === User-facing entity schema base ===
 
 class Entity(BaseModel):
@@ -245,8 +270,10 @@ __all__ = [
     "ConflictRule",
     "Entity",
     "EntityRecord",
+    "EntityTypeDef",
     "EntityVisibilityRule",
     "ExtractionStep",
+    "FieldDef",
     "FieldReadRule",
     "FieldStatus",
     "FieldValue",
