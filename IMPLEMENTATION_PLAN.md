@@ -205,16 +205,32 @@ Tiers 1, 2, 3, and 3.5 ran post-merge on `2026-05-03` against commit `da1ca40` o
 
 ## Step 8 — SDK clients
 
-**Status:** `pending`
+**Status:** `done`
 
-`AdminClient` / `AgentClient` (sync only for v0). `httpx.Client`, typed errors, no business logic.
+Sync `kentro.Client` 1:1 with HTTP routes; typed exceptions per status code; rules helpers (`ruleset_diff`, `render_rule`); Note.subject populate-on-write fix.
 
-**Lock-in for this step (per Decision 2 above):**
-- Land `core/rules.py::ruleset_diff(old, new)` and `core/rules.py::render_rule(r)` server-side; re-export through the SDK so Step 10's UI is thin.
-- `AdminClient` exposes `apply_ruleset`, `parse_nl_to_ruleset`, `get_active_ruleset` 1:1 with the routes — no hidden role logic in the client. The client returns the same typed `RuleSet` and `NLResponse` the routes return.
-- The `is_admin` distinction is reflected as a runtime exception (`AdminRequiredError`) raised when the server returns 403, not as separate client classes per role. Single `Client` constructor takes the api_key; admin-ness is the server's call.
+**What was built:**
 
-**What was built:** _pending_
+- **`packages/kentro/src/kentro/client.py`** — single `Client` class, sync only, wraps `httpx.Client`. Methods 1:1 with routes (`healthz`, `llm_stats`, `list_schema`, `register_schema`, `get_active_ruleset`, `apply_ruleset`, `parse_nl_to_ruleset`, `read`, `read_with`, `write`, `ingest`, `delete_document`, `remember`). Status-code dispatch in a single `_handle()` helper → typed exceptions (`AuthError`, `AdminRequiredError`, `NotFoundError`, `SchemaEvolutionError`, `ServerError`, `KentroError` base). Admin-ness is the server's call — methods that hit admin routes raise `AdminRequiredError` on 403 but the SDK does no role-checking. Constructor takes optional `transport=httpx.BaseTransport` for in-process testing (used by `tests/unit/sdk_client_test.py` to route through `TestClient(app)` via `httpx.MockTransport`); production callers leave it `None`.
+
+- **`packages/kentro/src/kentro/rules.py`** — `RuleSetDiff` dataclass + `ruleset_diff(old, new) -> RuleSetDiff` + `render_rule(rule) -> str`. Pure functions over SDK types; the foundation for Step 10's policy-editor diff highlights and CLI rendering. Per Decision 2.7, lives in the SDK so anyone with `pip install kentro` can use them.
+
+- **Note.subject populate-on-write** — `routes/memory.py` and `mcp_server.py::kentro_remember` now write `subject = json.dumps(body.subject)` so reads of `Note/<key>.subject` return the actual subject value instead of `UNKNOWN`. Closes the v0.1 follow-up logged on 2026-05-03 from the lineage walkthrough.
+
+- **`tests/unit/rules_helpers_test.py`** (17 tests) — diff-empty, diff-add, diff-remove, diff-order-invariance, diff-mixed; render for every Rule variant + every ResolverSpec variant; full RuleSet roundtrip.
+
+- **`tests/unit/sdk_client_test.py`** (15 tests) — drives `kentro.Client` against the in-process FastAPI app via `httpx.MockTransport` rerouted into `TestClient(app)`. Covers: healthz / llm_stats; auth error mapping (401 → AuthError); admin-gate mapping (403 → AdminRequiredError on apply_rules / register_schema / delete_document); schema list+register roundtrip; rules apply+get+parse with fake LLM; entities write/read roundtrip; `read_with(RawResolverSpec)` returns UNRESOLVED with both candidates; remember populates Note.subject (the new fix); remember roundtrips a `dict` `object_value` cleanly (Step 7 Critical-#5 contract); ingest with fake LLM.
+
+- **`tests/unit/api_smoke_test.py`** — updated `test_remember_writes_to_note_entity` to assert `Note.subject == "demo-prep"` (KNOWN, not UNKNOWN) — proves the populate-on-write fix from the data-plane angle.
+
+**148/148 unit tests pass; ruff lint + format + ty all clean.**
+
+**What was deliberately NOT built (deferred):**
+- Async client (sync only for v0).
+- Retries / backoff / circuit breaker (caller decides).
+- Pagination (no list endpoints have it yet).
+- Document listing (no `GET /documents` route exists).
+- `Note.subject` schema deprecation — populate-on-write was the simpler fix; no schema evolution needed.
 
 ---
 
@@ -284,6 +300,27 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
   real Anthropic calls when `ANTHROPIC_API_KEY` is set; it is `pytest.skip`'d in CI.
   Once CI is wired, decide whether to plumb the API key through (cost!) or run the
   smoke test on a separate scheduled job. Do not block on this until then.
+- **Background dev-server convenience (`kentro.dev.LocalServer()` or `kentro-server demo`).**
+  A "one-line notebook / one-command CLI" demo experience that auto-spawns the kentro
+  server in a child process. Deliberately NOT in Step 8 to keep the SDK thin (auto-spawn
+  means subprocess management — port allocation, log capture, signal propagation,
+  cleanup-on-Ctrl-C — adds ~3× SDK size and a much harder failure mode mid-demo).
+  Surface AFTER Step 10 (UI) lands — by then the demo entry point is settled. Either
+  a `kentro.dev.LocalServer()` context manager or a `kentro-server demo` CLI command,
+  ~80 LOC if scoped tight (the hard parts: signal propagation so notebook Ctrl-C
+  kills the child, free-port allocation if 8000 is taken). Memory note saved at
+  `pending_dev_server_polish.md`.
+- **Witchcraft wiring into ingestion.** The locked decision (§Decisions §1)
+  is "subprocess wrapper around `warp-cli`" — but as of 2026-05-03, Witchcraft is
+  NOT actually called from the ingestion path. The per-tenant store's `witchcraft/`
+  directory is created but unused. Two open questions to resolve BEFORE Step 11:
+  (a) Does the demo script depend on semantic search? If yes, wire Witchcraft
+  through the ingestor (~few hundred LOC, lands in Step 11). If no, defer the
+  integration to v0.1 entirely. (b) Installation: ship `scripts/install-witchcraft.sh`
+  for the Mac demo path (clones dropbox/witchcraft, runs `make warp-cli`, downloads
+  HF assets ~700MB); bake into Docker for Step 12 GCP deploy. Never installable via
+  the SDK — it's a system binary at the wrong layer. PyO3/maturin binding remains
+  v0.1. Memory note saved at `pending_witchcraft_wiring.md`.
 
 ## Open questions / decisions awaiting input
 
