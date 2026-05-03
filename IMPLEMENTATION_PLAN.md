@@ -76,11 +76,20 @@ Tests (`tests/unit/store_test.py`, 6 cases): schema creation, agent/entity/field
 
 ## Step 4 — ACL evaluator
 
-**Status:** `pending`
+**Status:** `done`
 
-Pure function `(entity, field, op, agent, ruleset) → AclDecision`. Test corpus driven by `demo.md` access matrix.
+Pure functions in `packages/kentro_server/src/kentro_server/core/acl.py`:
+- `evaluate_field_read(entity_type, field_name, agent_id, ruleset) → AclDecision`
+- `evaluate_entity_visibility(entity_type, entity_key, agent_id, ruleset) → AclDecision`
+- `evaluate_write(entity_type, field_name, agent_id, ruleset) → AclDecision`
 
-**What was built:** _pending_
+`AclDecision` carries `allowed: bool` plus a human-readable `reason: str | None` for denials.
+
+Policy combining (documented in module docstring): **deny overrides allow; default deny when no rule matches; `requires_approval=True` acts as a deny in v0** (with the specific demo-line reason `"write blocked: manager approval required"`).
+
+Tests (`tests/unit/acl_test.py`, 13 cases) drive the demo.md access matrix end-to-end — Sales/CS read/write/visibility for both the initial state AND the post-Scene-4 state (deal_size redaction, AuditLog/Acme grant, support_tickets manager-approval lock). 24/24 unit tests pass.
+
+**What was built:** Three pure ACL evaluators consumed by Step 7's read/write paths. No I/O, no DB. Decision is a single typed value. Approval-required writes block in v0 with a specific reason; the flag survives so a future approval workflow can act on it.
 
 ---
 
