@@ -95,11 +95,23 @@ Tests (`tests/unit/acl_test.py`, 13 cases) drive the demo.md access matrix end-t
 
 ## Step 5 — Conflict detection & resolvers
 
-**Status:** `pending`
+**Status:** `done`
 
-`core/conflict.py` + SDK resolvers: `RawResolver`, `LatestWriteResolver`, `PreferAgent`, `AutoResolver`, `SkillResolver`. `UNRESOLVED` path with reason.
+Server-side modules:
+- `packages/kentro_server/src/kentro_server/core/conflict.py` — `record_field_write(...)`. Inserts the new `FieldWriteRow`, then opens (or reuses) a `ConflictRow` only when the live writes for that (entity, field) carry **multiple distinct `value_json`**. Same-value-multi-write is corroboration, not conflict.
+- `packages/kentro_server/src/kentro_server/core/resolve.py` — `resolve(...)` returns a `ResolvedFieldValue(status, winner, candidates, reason, resolver_used)`. Single-candidate and corroboration cases short-circuit. `AutoResolverSpec` dispatches to the active `ConflictRule` for `(entity_type, field_name)` and falls back to `LatestWriteResolverSpec` when none matches (per `demo.md` cell 12).
+- `packages/kentro_server/src/kentro_server/skills/llm_client.py` — `LLMClient` ABC + `OfflineLLMClient` stub + `SkillResolverDecision`. `OfflineLLMClient` always returns UNRESOLVED with a clear reason. Step 6 will add Gemini and Anthropic backends behind the same interface.
 
-**What was built:** _pending_
+SDK module:
+- `packages/kentro/src/kentro/resolvers.py` — five user-facing wrappers (`RawResolver`, `LatestWriteResolver`, `PreferAgent(agent_id)`, `SkillResolver(prompt, model=None)`, `AutoResolver`), each with `.to_spec()` for serialization.
+
+Tests:
+- `tests/unit/conflict_test.py` — 7 cases: single write, corroboration (same value), conflict (different values), reuse-existing-conflict-on-3rd-write, multi-field hydration (different fields = no conflict), resolved-then-fresh-conflict, lineage-fields-persist.
+- `tests/unit/resolve_test.py` — 12 cases: single-candidate fast path, corroboration fast path, empty-candidates raises, RawResolver UNRESOLVED, LatestWrite picks email, PreferAgent match-and-no-match, AutoResolver default-to-LatestWrite, AutoResolver dispatches-to-Skill, SkillResolver KNOWN with fake online client, SkillResolver UNRESOLVED with explicit None decision, SkillResolver defensive UNRESOLVED on hallucinated value.
+
+**Total:** 43/43 unit tests pass.
+
+**What was built:** A pure-function read-time resolution dispatcher and a write-time conflict detector that honor "conflicts are stored, not resolved at write time" and "the SDK never asks back". The LLM seam is in place; Step 6 plugs in real backends without touching `resolve()` or `conflict.py`. `superseded` remains untouched in v0; resolution recomputes against live writes on every read so source removal works without bespoke "undo" logic.
 
 ---
 
