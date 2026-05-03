@@ -15,17 +15,17 @@ Post-Scene-4 state (the four-rule change):
 - Conflict:          deal_size resolver swapped (covered in Step 5 tests, not here).
 """
 
+from kentro.acl import (
+    AclDecision,
+    evaluate_entity_visibility,
+    evaluate_field_read,
+    evaluate_write,
+)
 from kentro.types import (
     EntityVisibilityRule,
     FieldReadRule,
     RuleSet,
     WriteRule,
-)
-from kentro_server.core.acl import (
-    AclDecision,
-    evaluate_entity_visibility,
-    evaluate_field_read,
-    evaluate_write,
 )
 
 SALES = "sales"

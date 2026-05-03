@@ -36,13 +36,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from kentro.acl import evaluate_write
 from kentro.types import AutoResolverSpec, EntityTypeDef, RuleSet, WriteStatus
 from mcp.server.fastmcp import FastMCP
 from pydantic import TypeAdapter
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from kentro_server.api.auth import Principal
-from kentro_server.core.acl import evaluate_write
 from kentro_server.core.read import read_entity
 from kentro_server.core.rules import apply_ruleset, load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry

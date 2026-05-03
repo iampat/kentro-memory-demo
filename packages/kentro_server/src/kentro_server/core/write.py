@@ -14,11 +14,11 @@ while lineage stamped v(N). One source of truth, no skew.
 
 import logging
 
+from kentro.acl import evaluate_write
 from kentro.types import WriteResult, WriteStatus
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
-from kentro_server.core.acl import evaluate_write
 from kentro_server.core.conflict import record_field_write
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry

@@ -29,12 +29,12 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException, status
+from kentro.acl import evaluate_write
 from kentro.types import WriteResult, WriteStatus
 
 from kentro_server.api.auth import PrincipalDep
 from kentro_server.api.deps import SchemaRegistryDep
 from kentro_server.api.dtos import RememberRequest
-from kentro_server.core.acl import evaluate_write
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.write import write_field
 

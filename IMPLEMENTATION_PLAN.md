@@ -236,16 +236,32 @@ Sync `kentro.Client` 1:1 with HTTP routes; typed exceptions per status code; rul
 
 ## Step 9 — Visualization helpers
 
-**Status:** `pending`
+**Status:** `done`
 
-`viz.access_matrix`, `viz.entity_graph`, `viz.lineage`, `viz.conflicts`, `viz.rule_diff`. Mirror in `viz_cli.*` for the typer CLI.
+Pure data transformations over SDK types in `kentro.viz`; Rich-based CLI renderers in `kentro_server.viz_cli`. Plus the supporting `kentro.acl` move (was server-only, now SDK).
 
-**Lock-in for this step (per Decision 2 above):**
-- `viz.access_matrix(ruleset, agents, entities) -> Matrix` — the data shape behind Step 10's right-pane default view. Rows = agents, cols = (entity_type, field_name), cells = `{"read": "allow"|"deny"|"hidden", "write": "allow"|"deny"}`. UI consumes; CLI prints.
-- `viz.rule_diff(old, new)` — wraps `core/rules.py::ruleset_diff()` (lands in Step 8) for human-friendly rendering: grouped by rule type, color-coded `+`/`−`. Used by both the right-pane diff highlights and the `kentro-server rules diff vN vM` CLI.
-- `viz.conflicts(store)` — list of `(entity_type, field_name)` with open `ConflictRow`s + the resolver currently in effect for each. Surfaces the demo's "two writes disagree, here's how it'll resolve" beat.
+**What was built:**
 
-**What was built:** _pending_
+- **`kentro/acl.py`** — moved from `kentro_server/core/acl.py`. The ACL evaluator is pure logic over `RuleSet` (a SDK type) so it belongs in the SDK. All four call sites (`core/read.py`, `core/write.py`, `routes/memory.py`, `mcp_server.py`) and two test files updated to import `from kentro.acl import ...`. Re-exported via `kentro.evaluate_field_read` etc. so notebooks can call ACL eval without the server. Same combining algorithm; same default-deny semantics; no behavior change.
+
+- **`kentro/viz.py`** — four pure transformations + their dataclasses:
+  - `access_matrix(*, ruleset, agents, entity_type_defs) -> AccessMatrix` (rows × cols × cells with read/write/visibility per cell). The right-pane default view.
+  - `rule_diff(old, new) -> RuleDiffView` — wraps `kentro.rules.ruleset_diff` and groups added/removed/unchanged by rule type; carries `total_added` / `total_removed` for the panel header. Sections appear in fixed order matching Decision 2.5: `field_read`, `entity_visibility`, `write`, `conflict`.
+  - `lineage(record) -> LineageView` — flattens `EntityRecord` → per-field `LineageEntry` list. KNOWN fields get one entry per LineageRecord; UNRESOLVED gets one per candidate (each carries its own lineage); HIDDEN/UNKNOWN have empty entries.
+  - `conflicts_from_records(records) -> ConflictsView` — scans for UNRESOLVED fields. Server-side `GET /conflicts` route is deferred (see "Deferred to the very end") — this works on records the caller already fetched.
+
+- **`kentro_server/viz_cli.py`** — Rich-based renderers for each viz dataclass: `print_access_matrix` (Rich Table with ✓/✗/●/○ glyphs for read/write/visibility), `print_rule_diff` (Rich Panel per non-empty section, green `+` / red `−` lines), `print_lineage` (per-field section with status + indented entries), `print_conflicts` (Rich Table). Lives server-side because Rich is a server-side dep (kept out of the SDK to keep it lean for HTTP-only consumers).
+
+- **CLI commands wiring viz_cli into `kentro-server` typer commands** — deferred. Renderers are callable directly from any custom CLI command or notebook today; `kentro-server access-matrix --api-key X`, `kentro-server rule-diff vN vM`, etc. are not built yet because they require new server routes to fetch historical RuleSet versions. That's a Step 11 / v0.1 follow-up.
+
+- **`tests/unit/viz_test.py`** (10 tests) — default-deny matrix, explicit-grants matrix, two-agents-two-types coverage, rule_diff grouping, no-changes diff, lineage for KNOWN / UNRESOLVED / HIDDEN-UNKNOWN, conflicts_from_records filter + empty case. Existing `acl_test.py` (13 tests) confirms the `acl.py` move didn't change behavior.
+
+**158/158 unit tests pass; ruff lint + format + ty all clean.**
+
+**What was deliberately NOT built (deferred):**
+- `entity_graph` (the fifth viz helper from the original list). The data model has no entity-to-entity foreign keys; the meaningful "graph" is lineage edges from entity → source documents, which is already exposed by `lineage()`. Real `entity_graph` lands in Step 10 if the UI needs a separate diagram, or v0.1 otherwise.
+- Server routes for fetching historical `RuleSet` versions (`GET /rules/versions/{n}`) — needed for a `kentro-server rule-diff vN vM` CLI; defer until Step 10/11 needs version-aware diff.
+- A `GET /conflicts` route + matching `client.list_conflicts()` SDK method — the v0 path is to call `client.read_with(..., RawResolverSpec())` per entity then pass records to `conflicts_from_records()`. Add the route when Step 10's UI needs a "what's open across the whole tenant" view.
 
 ---
 
