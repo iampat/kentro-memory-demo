@@ -1,8 +1,9 @@
 """Kentro SDK Pydantic v2 types — every public DTO crossing the API boundary.
 
-Mirrored verbatim in `packages/kentro_server/src/kentro_server/api/types.py`.
-Parity is enforced by `tests/unit/types_parity_test.py`. Drift is intentional only when
-the test is updated in the same change.
+This module is the single source of truth for the wire format. `kentro_server`
+depends on the `kentro` SDK package and imports these types directly. (Earlier
+iterations duplicated the types into the server with a parity test; that was
+retired in Step 7.)
 """
 
 from datetime import datetime
@@ -236,14 +237,21 @@ class FieldDef(BaseModel):
     """One declared field on an `Entity` subclass.
 
     `type_str` is the Python annotation as a string (e.g. `"str"`, `"float | None"`,
-    `"list[str]"`). v0 stores it for documentation + future validation; the server does
-    not currently validate extracted values against the type.
+    `"list[str]"`). v0 stores it for documentation + future validation; the server
+    does not currently validate extracted values against the type.
+
+    Per the schema-evolution rules (Step 7), every field is optional — `required` is
+    not modeled. An entity can exist as a bare `EntityRow` with zero known fields;
+    reads return `FieldValue(status=UNKNOWN)` for fields nobody has written yet.
+
+    `deprecated=True` marks a field that will no longer accept new writes and is
+    excluded from the extractor prompt. Existing writes for the field stay readable.
     """
 
     model_config = ConfigDict(frozen=True)
     name: str
     type_str: str
-    required: bool = True
+    deprecated: bool = False
     default_json: str | None = None
 
 

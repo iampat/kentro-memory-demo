@@ -2,6 +2,19 @@
 
 Python project using **UV** for environment/dependency management, **FastAPI** for HTTP, and **SQLModel** (on SQLAlchemy 2.x) for the database layer.
 
+## SDK and server share types via `kentro.types` (no duplication)
+
+`packages/kentro/src/kentro/types.py` is the single source of truth for every
+wire-form Pydantic type. The server (`kentro_server`) depends on the `kentro`
+SDK package and imports types directly. There is **no** parallel mirror in
+`kentro_server.api.types`, no parity test, no sync skill — those existed
+earlier and were retired in Step 7 because they paid maintenance cost without
+catching any real bug.
+
+If a type ever needs to diverge between the SDK and the server (e.g. an
+MCP-facing variant with stringified statuses), introduce a server-only
+subclass at that point. Don't pre-emptively duplicate.
+
 ## The handoff is ground truth — DO NOT DIVERGE WITHOUT EXPLICIT APPROVAL
 
 `implementation-handoff.md` (and the three documents it references — `demo.md`, `memory.md`, `memory-system.md`) are the authoritative spec for this project. Treat them as locked.

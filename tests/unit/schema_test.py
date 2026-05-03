@@ -6,7 +6,13 @@ import pytest
 from kentro.schema import entity_type_def_from
 from kentro.types import Entity, EntityTypeDef, FieldDef
 from kentro_server.core.schema_registry import SchemaRegistry
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig, TenantStore
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+    TenantStore,
+)
 
 # === SDK introspection ===
 
@@ -24,17 +30,21 @@ class Person(Entity):
     email: str | None = None
 
 
-def test_introspect_required_and_optional_fields() -> None:
+def test_introspect_captures_all_field_names() -> None:
+    """All fields are optional in the wire form (no `required` attribute).
+    The schema-evolution contract treats every field as optional; an entity can
+    exist as a bare row with zero known values."""
     td = entity_type_def_from(Customer)
     if td.name != "Customer":
         raise AssertionError(f"expected name=Customer, got {td.name!r}")
     by_name = {f.name: f for f in td.fields}
     if {"name", "contact", "deal_size", "sales_notes"} != set(by_name):
         raise AssertionError(f"unexpected field set: {set(by_name)}")
-    if not by_name["name"].required:
-        raise AssertionError("name should be required")
-    if by_name["contact"].required:
-        raise AssertionError("contact should be optional")
+    # No `required` attribute exists on FieldDef anymore — by design.
+    if hasattr(by_name["name"], "required"):
+        raise AssertionError("FieldDef.required must not exist; everything is optional")
+    if by_name["name"].deprecated:
+        raise AssertionError("freshly introspected fields must not be deprecated")
 
 
 def test_introspect_renders_optional_type_as_pipe_form() -> None:
@@ -60,7 +70,14 @@ def test_introspect_captures_string_default() -> None:
 
 @pytest.fixture
 def store(tmp_path: Path) -> TenantStore:
-    config = TenantsConfig(tenants=(TenantConfig(id="demo-1", api_key="demo-1-key"),))
+    config = TenantsConfig(
+        tenants=(
+            TenantConfig(
+                id="demo-1",
+                agents=(AgentConfig(id="ingestion_agent", api_key="demo-1-key"),),
+            ),
+        )
+    )
     return TenantRegistry(tmp_path / "kentro_state", config).get("demo-1")
 
 

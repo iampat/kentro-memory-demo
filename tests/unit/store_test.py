@@ -5,7 +5,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+)
 from kentro_server.store.models import (
     AgentRow,
     DocumentRow,
@@ -18,7 +23,13 @@ from sqlmodel import select
 
 def _make_registry(state_dir: Path, *tenant_ids: str) -> TenantRegistry:
     config = TenantsConfig(
-        tenants=tuple(TenantConfig(id=tid, api_key=f"{tid}-key") for tid in tenant_ids)
+        tenants=tuple(
+            TenantConfig(
+                id=tid,
+                agents=(AgentConfig(id="ingestion_agent", api_key=f"{tid}-key"),),
+            )
+            for tid in tenant_ids
+        )
     )
     return TenantRegistry(state_dir, config)
 
@@ -140,7 +151,12 @@ def test_reset_tenant_wipes_state(registry: TenantRegistry) -> None:
 def test_invalid_tenant_id_rejected(tmp_path: Path) -> None:
     """Codex finding: tenant IDs that escape the state root must be rejected."""
     bad_config = TenantsConfig(
-        tenants=(TenantConfig(id="../escape", api_key="x"),),
+        tenants=(
+            TenantConfig(
+                id="../escape",
+                agents=(AgentConfig(id="x", api_key="x"),),
+            ),
+        ),
     )
     with pytest.raises(ValueError, match="invalid tenant_id"):
         TenantRegistry(tmp_path / "kentro_state", bad_config)
@@ -151,12 +167,36 @@ def test_unknown_tenant_id_raises(registry: TenantRegistry) -> None:
         registry.get("not-configured")
 
 
-def test_lookup_by_api_key(registry: TenantRegistry) -> None:
-    store = registry.by_api_key("demo-1-key")
+def test_lookup_by_api_key_returns_tenant_and_agent(registry: TenantRegistry) -> None:
+    store, agent_id = registry.by_api_key("demo-1-key")
     if store.tenant_id != "demo-1":
-        raise AssertionError(f"api-key lookup wrong: got {store.tenant_id}")
+        raise AssertionError(f"api-key lookup wrong: got tenant {store.tenant_id}")
+    if agent_id != "ingestion_agent":
+        raise AssertionError(f"api-key lookup wrong: got agent {agent_id}")
     with pytest.raises(KeyError, match="unknown api_key"):
         registry.by_api_key("not-a-real-key")
+
+
+def test_duplicate_api_keys_rejected_at_load(tmp_path: Path) -> None:
+    """Same key in two different tenants would silently route to last-loaded — deny."""
+    with pytest.raises(ValueError, match="duplicate api_key"):
+        TenantsConfig(
+            tenants=(
+                TenantConfig(id="t1", agents=(AgentConfig(id="a", api_key="same"),)),
+                TenantConfig(id="t2", agents=(AgentConfig(id="b", api_key="same"),)),
+            ),
+        )
+
+
+def test_duplicate_agent_ids_in_one_tenant_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate agent id"):
+        TenantConfig(
+            id="t",
+            agents=(
+                AgentConfig(id="dup", api_key="k1"),
+                AgentConfig(id="dup", api_key="k2"),
+            ),
+        )
 
 
 def test_blob_store_rejects_sibling_prefix(registry: TenantRegistry) -> None:

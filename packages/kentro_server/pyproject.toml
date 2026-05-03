@@ -7,6 +7,7 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Kentro AI Labs" }]
 dependencies = [
+    "kentro",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlmodel>=0.0.22",
@@ -18,6 +19,7 @@ dependencies = [
     "httpx>=0.27",
     "anthropic>=0.97",
     "google-genai>=1.74",
+    "mcp>=1.0",
 ]
 
 [project.scripts]

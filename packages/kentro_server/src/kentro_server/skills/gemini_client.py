@@ -14,12 +14,12 @@ import instructor
 from google import genai
 from pydantic import BaseModel
 
-from kentro_server.skills.anthropic_client import _EXTRACT_SYSTEM, _SKILL_SYSTEM
 from kentro_server.skills.llm_client import (
     ExtractionResult,
     LLMClient,
     SkillResolverDecision,
 )
+from kentro_server.skills.skill_loader import load_skill_markdown
 
 if TYPE_CHECKING:
     from kentro_server.store.models import FieldWriteRow
@@ -60,7 +60,7 @@ class GeminiLLMClient(LLMClient):
         user = _format_skill_user(prompt, candidates)
         return self._complete(
             model=model or self.fast_model,
-            system=_SKILL_SYSTEM,
+            system=load_skill_markdown("skill_resolver"),
             user=user,
             response_model=SkillResolverDecision,
         )
@@ -76,7 +76,7 @@ class GeminiLLMClient(LLMClient):
         user = _format_extract_user(document_text, registered_schemas, document_label)
         return self._complete(
             model=model or self.smart_model,
-            system=_EXTRACT_SYSTEM,
+            system=load_skill_markdown("extract_entities"),
             user=user,
             response_model=ExtractionResult,
         )
@@ -132,11 +132,10 @@ def _format_extract_user(
     for td in registered_schemas:
         chunks.append(f"- {td.name}:")
         for f in td.fields:
-            req = "required" if f.required else "optional"
-            default = (
-                f" (default: {f.default_json})" if (not f.required and f.default_json) else ""
-            )
-            chunks.append(f"    * {f.name}: {f.type_str} ({req}){default}")
+            if f.deprecated:
+                continue
+            default = f" (default: {f.default_json})" if f.default_json else ""
+            chunks.append(f"    * {f.name}: {f.type_str}{default}")
     schema_block = "\n".join(chunks)
     header = f"DOCUMENT LABEL: {document_label}\n" if document_label else ""
     return f"REGISTERED SCHEMA:\n{schema_block}\n\n{header}DOCUMENT:\n{document_text}"

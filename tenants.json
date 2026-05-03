@@ -3,7 +3,23 @@
     {
       "id": "local",
       "display_name": "Local Dev",
-      "api_key": "local-dev-key-do-not-share"
+      "agents": [
+        {
+          "id": "ingestion_agent",
+          "display_name": "Ingestion Agent",
+          "api_key": "local-ingestion-do-not-share"
+        },
+        {
+          "id": "sales",
+          "display_name": "Sales Agent",
+          "api_key": "local-sales-do-not-share"
+        },
+        {
+          "id": "customer_service",
+          "display_name": "Customer Service Agent",
+          "api_key": "local-cs-do-not-share"
+        }
+      ]
     }
   ]
 }

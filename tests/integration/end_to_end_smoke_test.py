@@ -43,7 +43,12 @@ from kentro_server.core.source_removal import remove_document
 from kentro_server.extraction import ingest_document
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import make_llm_client
-from kentro_server.store import TenantConfig, TenantRegistry, TenantsConfig
+from kentro_server.store import (
+    AgentConfig,
+    TenantConfig,
+    TenantRegistry,
+    TenantsConfig,
+)
 from kentro_server.store.models import (
     AgentRow,
     ConflictRow,
@@ -105,7 +110,14 @@ def _new_world(tmp_path: Path):
     if not settings.anthropic_api_key:
         pytest.skip("ANTHROPIC_API_KEY missing")
 
-    config = TenantsConfig(tenants=(TenantConfig(id="local", api_key="test-key"),))
+    config = TenantsConfig(
+        tenants=(
+            TenantConfig(
+                id="local",
+                agents=(AgentConfig(id="ingestion_agent", api_key="test-key"),),
+            ),
+        )
+    )
     registry = TenantRegistry(settings.kentro_state_dir, config)
     store = registry.get("local")
 

@@ -34,11 +34,10 @@ run() {
     fi
 }
 
-# Run the types-parity check FIRST and as its own step so any drift between
-# `kentro.types` and `kentro_server.api.types` shows the diff loudly without
-# being buried inside a 50-test pytest output.
-run "types parity (kentro <-> kentro_server)" \
-    uv run pytest tests/unit/types_parity_test.py -v --tb=short
+# Note: there used to be a dedicated "types parity" step here, back when the
+# server held a hand-mirrored copy of `kentro.types`. That mirror was retired in
+# Step 7 — the server imports the SDK types directly now — so the parity step is
+# no longer applicable.
 
 run "ruff lint"   uv run ruff check .
 run "ruff format" uv run ruff format --check .
