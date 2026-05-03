@@ -57,12 +57,17 @@ def ingest_document(
     written_by_agent_id: str,
     rule_version: int,
     smart_model: str,
+    source_class: str | None = None,
 ) -> IngestionResult:
     """Ingest one document end-to-end. Returns the SDK-shaped `IngestionResult`.
 
     `registered_schemas` is a list of `kentro.types.EntityTypeDef` (typed loosely
     here to avoid the SDK→server import); the LLM sees the full field declarations
     so it emits canonical field names with values matching the declared types.
+
+    `source_class` is an optional string the caller can attach to the document
+    (e.g. `"verbal"` for call transcripts, `"written"` for emails). Persisted
+    on `DocumentRow.source_class`; consumed by SkillResolvers and the demo UI.
     """
     text = content.decode("utf-8")
     content_hash = hashlib.sha256(content).hexdigest()
@@ -115,6 +120,7 @@ def ingest_document(
                     blob_key=blob_key,
                     content_hash=content_hash,
                     label=label,
+                    source_class=source_class,
                 )
             )
             session.add(

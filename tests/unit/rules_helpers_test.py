@@ -3,7 +3,7 @@
 Pure-function tests; no server, no Pydantic models beyond what the SDK ships.
 """
 
-from kentro.rules import RuleSetDiff, render_rule, ruleset_diff
+from kentro.rules import RuleSetDiff, render_rule, render_rule_as_rego, ruleset_diff
 from kentro.types import (
     ConflictRule,
     EntityVisibilityRule,
@@ -182,6 +182,126 @@ def test_render_conflict_raw() -> None:
     )
     if not out.startswith("[raw]"):
         raise AssertionError(f"unexpected render: {out!r}")
+
+
+# === render_rule_as_rego =============================================================
+
+
+def test_render_rego_field_read_allow() -> None:
+    out = render_rule_as_rego(
+        FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True)
+    )
+    if "package kentro.access" not in out:
+        raise AssertionError(f"missing package header: {out!r}")
+    if "allow {" not in out:
+        raise AssertionError(f"expected allow rule, got {out!r}")
+    if '"sales"' not in out or '"Customer"' not in out or '"name"' not in out:
+        raise AssertionError(f"missing identifiers in: {out!r}")
+
+
+def test_render_rego_field_read_deny_uses_msg() -> None:
+    out = render_rule_as_rego(
+        FieldReadRule(agent_id="cs", entity_type="Customer", field_name="deal_size", allowed=False)
+    )
+    if "deny[msg]" not in out or "msg :=" not in out:
+        raise AssertionError(f"deny rule missing msg binding: {out!r}")
+
+
+def test_render_rego_write_omits_field_when_wildcard() -> None:
+    out = render_rule_as_rego(WriteRule(agent_id="sales", entity_type="Customer", allowed=True))
+    if "input.resource.field" in out:
+        raise AssertionError(f"wildcard write should not name a field, got: {out!r}")
+
+
+def test_render_rego_visibility_includes_entity_key_when_set() -> None:
+    out = render_rule_as_rego(
+        EntityVisibilityRule(
+            agent_id="sales", entity_type="Customer", entity_key="Acme", allowed=False
+        )
+    )
+    if '"Acme"' not in out:
+        raise AssertionError(f"entity_key missing from rendered Rego: {out!r}")
+
+
+def test_render_rego_skill_written_vs_verbal_uses_canonical_demo_shape() -> None:
+    out = render_rule_as_rego(
+        ConflictRule(
+            entity_type="Customer",
+            field_name="deal_size",
+            resolver=SkillResolverSpec(prompt="written outweighs verbal, latest wins"),
+        )
+    )
+    # Demo's canonical written-vs-verbal Rego shape is what the prototype shows.
+    if 'sourceClass == "written"' not in out:
+        raise AssertionError(f"expected written-vs-verbal canonical shape, got: {out!r}")
+    if "package kentro.resolve" not in out:
+        raise AssertionError(f"expected resolve package, got: {out!r}")
+
+
+def test_render_rego_skill_generic_falls_back_when_prompt_unrelated() -> None:
+    out = render_rule_as_rego(
+        ConflictRule(
+            entity_type="Customer",
+            field_name="contact",
+            resolver=SkillResolverSpec(prompt="prefer the most recently confirmed"),
+        )
+    )
+    if "skill_pick" not in out:
+        raise AssertionError(f"expected generic skill_pick fallback, got: {out!r}")
+
+
+def test_render_rego_latest_write() -> None:
+    out = render_rule_as_rego(
+        ConflictRule(
+            entity_type="Customer",
+            field_name="deal_size",
+            resolver=LatestWriteResolverSpec(),
+        )
+    )
+    if "exists_newer" not in out:
+        raise AssertionError(f"latest-write rego shape changed: {out!r}")
+
+
+def test_render_rego_prefer_agent() -> None:
+    out = render_rule_as_rego(
+        ConflictRule(
+            entity_type="Customer",
+            field_name="deal_size",
+            resolver=PreferAgentResolverSpec(agent_id="ingestion_agent"),
+        )
+    )
+    if '"ingestion_agent"' not in out:
+        raise AssertionError(f"prefer_agent didn't include agent_id: {out!r}")
+
+
+def test_render_rego_raw() -> None:
+    out = render_rule_as_rego(
+        ConflictRule(
+            entity_type="Customer",
+            field_name="deal_size",
+            resolver=RawResolverSpec(),
+        )
+    )
+    if "unresolved[field]" not in out:
+        raise AssertionError(f"raw resolver should render an unresolved set: {out!r}")
+
+
+def test_render_rego_all_rules_round_trip_without_exception() -> None:
+    """Sanity: every Rule variant produces non-empty Rego."""
+    rules = (
+        FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
+        WriteRule(agent_id="sales", entity_type="Customer", allowed=True),
+        EntityVisibilityRule(agent_id="cs", entity_type="Customer", allowed=False),
+        ConflictRule(
+            entity_type="Customer",
+            field_name="deal_size",
+            resolver=SkillResolverSpec(prompt="x"),
+        ),
+    )
+    for r in rules:
+        out = render_rule_as_rego(r)
+        if not out or "package kentro" not in out:
+            raise AssertionError(f"rendered Rego is empty or malformed for {r!r}: {out!r}")
 
 
 def test_render_all_rules_in_a_ruleset() -> None:

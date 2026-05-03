@@ -34,7 +34,21 @@ class AgentRow(SQLModel, table=True):
 
 
 class DocumentRow(SQLModel, table=True):
-    """A source document (markdown blob lives in the tenant's blob store)."""
+    """A source document (markdown blob lives in the tenant's blob store).
+
+    `source_class` is a v0 hint used by the demo UI and by SkillResolvers that
+    distinguish "verbal" sources (calls, transcripts) from "written" sources
+    (emails, tickets). Free-form string for v0 — typical values are `"verbal"`,
+    `"written"`, `"system"`. Optional and nullable for backward compatibility
+    with documents ingested before this column existed.
+
+    Note: adding this column to an EXISTING tenant DB requires either deleting
+    `kentro_state/<tenant>/state.sqlite` (clean re-seed) or running a manual
+    `ALTER TABLE document ADD COLUMN source_class VARCHAR;` — the lifespan's
+    `SQLModel.metadata.create_all()` only creates missing tables, never alters
+    existing ones. For dev-local upgrades, deleting state and re-seeding is
+    fine; for any deployed instance, run the ALTER beforehand.
+    """
 
     __tablename__ = "document"
 
@@ -42,6 +56,7 @@ class DocumentRow(SQLModel, table=True):
     blob_key: str
     content_hash: str = Field(index=True)
     label: str | None = None
+    source_class: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now_utc)
 
 

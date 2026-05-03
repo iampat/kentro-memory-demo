@@ -49,3 +49,44 @@ def test_llm_stats_endpoint_responds(isolated_state: None) -> None:
         payload = r.json()
         if "hits" not in payload or "inner_calls" not in payload:
             raise AssertionError(f"unexpected /llm/stats payload: {payload!r}")
+
+
+def test_static_ui_served_at_root(isolated_state: None) -> None:
+    """`GET /` returns the prototype's index.html — proves the StaticFiles mount is wired
+    AND that it doesn't shadow the explicit routes (healthz / llm_stats above still work).
+    """
+    with TestClient(app) as client:
+        r = client.get("/")
+        if r.status_code != 200:
+            raise AssertionError(f"expected 200 at /, got {r.status_code}: {r.text[:200]}")
+        body = r.text
+        if "<title>Kentro · Demo</title>" not in body:
+            raise AssertionError(f"index.html title missing — got body[:200]: {body[:200]!r}")
+
+
+def test_static_ui_serves_named_files(isolated_state: None) -> None:
+    """The bundled `app.jsx` is reachable as `/app.jsx` so the in-page <script>
+    tags resolve. Also covers `styles.css`, `data.js`, etc. via one path."""
+    with TestClient(app) as client:
+        r = client.get("/app.jsx")
+        if r.status_code != 200:
+            raise AssertionError(f"expected 200 at /app.jsx, got {r.status_code}")
+        # The prototype's app.jsx defines window.K = {...} helpers; sanity check
+        # we got the JS content, not an HTML 404 page.
+        if "React" not in r.text and "function" not in r.text:
+            raise AssertionError("/app.jsx returned non-JS content")
+
+
+def test_mcp_mount_still_works_after_static(isolated_state: None) -> None:
+    """Regression guard: with StaticFiles mounted at `/`, `/mcp` must still
+    route to the MCP sub-app (307 → /mcp/), not be served as a static path."""
+    with TestClient(app) as client:
+        # follow_redirects=False so we observe the 307 explicitly
+        r = client.get("/mcp", follow_redirects=False)
+        # FastMCP redirects /mcp → /mcp/. If StaticFiles were shadowing /mcp,
+        # we'd get a 404 (file not found) instead of the 307.
+        if r.status_code not in {200, 307}:
+            raise AssertionError(
+                f"expected 200 or 307 at /mcp (MCP sub-app), got {r.status_code} "
+                "— StaticFiles may be shadowing the /mcp mount"
+            )
