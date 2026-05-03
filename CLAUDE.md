@@ -17,6 +17,32 @@ Python project using **UV** for environment/dependency management, **FastAPI** f
 
 **When divergence is approved**, record it in `CHANGE_LOG.md` AND update the corresponding section of `implementation-handoff.md` AND `IMPLEMENTATION_PLAN.md` so the spec stays the single source of truth. The plan and log are not allowed to drift from the handoff.
 
+## No singletons
+
+Do not introduce module-level singletons (`_singleton: T | None = None` patterns or
+class-level shared instances). They make state hidden, ordering brittle, and tests
+hard to isolate.
+
+Use one of these instead:
+
+- **FastAPI:** dependency injection via `Depends(...)`. Construct expensive resources
+  (LLM clients, store registries, settings) once at app startup in a lifespan handler,
+  attach them to `app.state.<name>`, and access them in routes through a `Depends`
+  helper. Tests override the dependency.
+- **Plain Python:** pass the dependency in explicitly. `def some_fn(*, llm: LLMClient, ...)`
+  beats `def some_fn(): llm = get_llm_client()`. The cost is one extra parameter in a
+  signature; the gain is testability and explicit ownership.
+- **Configuration:** read settings (`Settings()`) at the call site that needs them, or
+  pass a `Settings` instance through. Don't hide settings behind a getter that caches.
+
+If a place truly needs process-wide state (e.g. a counter, a connection pool), wire it
+explicitly through dependency injection or pass it through call chains. The mental
+test: "if I needed to spin up two of these in one test, could I?" — if the answer is
+no, the design is wrong.
+
+(Existing singletons in the codebase are flagged for cleanup in `IMPLEMENTATION_PLAN.md`
+under "Tech debt".)
+
 ## Tracking work — `IMPLEMENTATION_PLAN.md` and `CHANGE_LOG.md`
 
 The repo holds two living documents that you MUST keep current:

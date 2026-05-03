@@ -218,8 +218,11 @@ def test_auto_resolver_dispatches_to_skill_resolver_via_rule() -> None:
 class _FakeOnlineLLM(LLMClient):
     decision: SkillResolverDecision
 
-    def run_skill_resolver(self, *, prompt, candidates, model):
+    def run_skill_resolver(self, *, prompt, candidates, model=None):
         return self.decision
+
+    def extract_entities(self, *, document_text, registered_entity_types, document_label=None, model=None):
+        raise NotImplementedError("not exercised in resolve_test")
 
 
 def test_skill_resolver_known_when_decision_picks_existing_value() -> None:

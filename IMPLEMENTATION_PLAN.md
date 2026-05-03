@@ -117,11 +117,30 @@ Tests:
 
 ## Step 6 — Ingestion & entity extraction
 
-**Status:** `pending`
+**Status:** `done`
 
-`extraction/ingestor.py` + smart-tier `LLMClient`. Strict-key entity merge. LLM cache for deterministic recordings (gated by `KENTRO_LLM_OFFLINE`).
+LLM infrastructure (`packages/kentro_server/src/kentro_server/`):
+- `settings.py` — pydantic-settings reading `.env` (anthropic + google keys, fast/smart model names, cache toggle, state dir, host/port).
+- `skills/llm_client.py` — `LLMClient` ABC with `run_skill_resolver` (fast tier) + `extract_entities` (smart tier). Output schemas: `SkillResolverDecision`, `ExtractionResult` / `ExtractedEntity` / `ExtractedField`. `OfflineLLMClient` is the test stand-in (raises `LLMOfflineError` on `extract_entities`); never used in production.
+- `skills/anthropic_client.py` + `skills/gemini_client.py` — both providers via `instructor.from_anthropic` / `instructor.from_genai`. System prompts shared between providers so extraction is consistent.
+- `skills/cache.py` — `CachingLLMClient` wrapper. Disk-backed at `<state_dir>/.llm_cache/<sha256>.json`. Process-wide `CacheStats` (`hits`, `inner_calls`, `hit_rate`). `enabled` toggle for perf measurement.
+- `skills/factory.py` — `make_llm_client(settings)` detects provider per tier from model prefix (`claude-*` → Anthropic, `gemini-*` → Google), raises `LLMConfigError` on missing key, returns mixed-tier `_RoutingLLMClient` if needed, always wraps in `CachingLLMClient`. `get_llm_client()` is the lazy process singleton.
+- `main.py` — added `/llm/stats` FastAPI endpoint + `kentro-server llm-stats` CLI command (queries the running server's endpoint).
 
-**What was built:** _pending_
+Extractor (`packages/kentro_server/src/kentro_server/extraction/ingestor.py`):
+- `ingest_document(...)` does store-blob → DocumentRow → smart-tier `extract_entities` → ExtractionStepRow → strict-key get-or-create EntityRow → `record_field_write` per field → return SDK-shaped `IngestionResult`. Skips entities with unregistered types; `_decode_value` falls back to a string if the LLM returned non-JSON.
+- Token telemetry is `0/0` for v0 (TODO for v0.1 — instructor's structured-output responses don't expose usage uniformly across providers).
+
+Tests:
+- `tests/unit/factory_test.py` (10 cases): provider routing for claude/gemini/mixed; missing-key errors for both providers; unknown prefix error; cache toggle propagation.
+- `tests/unit/cache_test.py` (6 cases): cold-miss/warm-hit (across wrapper instances — proves disk persistence), disabled-bypass, distinct prompts → distinct keys, extract caching, hit-rate math, OfflineLLMClient.extract raises.
+- `tests/unit/ingestor_test.py` (4 cases): single-doc happy path with all side-effects verified, multi-doc strict-key hydration on `Person.Ali`, multi-doc same-field different-value conflict, unregistered entity-type rejection.
+
+**Total:** 63/63 unit tests pass.
+
+`.env.example` updated to Anthropic-only defaults with undated model IDs (`claude-haiku-4-5`, `claude-sonnet-4-6`) + `KENTRO_LLM_CACHE_ENABLED`. `KENTRO_LLM_OFFLINE` removed — the cache itself serves the same role.
+
+**What was built:** A provider-agnostic LLM client built on `instructor` with disk caching and per-process hit-rate counters. The factory routes per tier from the model name prefix, so switching to Gemini for either tier is a one-env-var change. The extractor turns one markdown blob into typed `EntityRecord`s with full lineage, persisting via the existing `record_field_write` so conflicts and corroboration land naturally. Step 7 will wire all of this behind `POST /documents`.
 
 ---
 
@@ -186,6 +205,25 @@ Per `implementation-handoff.md` §1.7. e2-medium VM, Docker + Caddy, persistent 
 **What was built:** _pending_
 
 ---
+
+## Tech debt — singletons to retire
+
+Per `CLAUDE.md` ("No singletons"), the following module-level singletons need to be
+replaced with FastAPI `Depends`-based dependency injection. Schedule the cleanup to
+land alongside Step 7 (HTTP API) since that's when the dependency-injection wiring
+naturally arrives.
+
+- `kentro_server.settings.get_settings()` and `reset_settings_for_tests()`
+  (`packages/kentro_server/src/kentro_server/settings.py`).
+- `kentro_server.skills.factory.get_llm_client()` and `reset_llm_client_for_tests()`
+  (`packages/kentro_server/src/kentro_server/skills/factory.py`).
+
+Plan: in Step 7, build a FastAPI lifespan handler that constructs `Settings` and the
+`LLMClient` once at startup, stores them on `app.state.{settings,llm_client}`, and
+exposes them via `Depends(get_settings_dep)` / `Depends(get_llm_client_dep)`. The
+`/llm/stats` endpoint and the route handlers all use `Depends`. The two `get_*()`
+free functions and their `reset_*` siblings then get deleted; tests use
+`app.dependency_overrides[...]` instead.
 
 ## Open questions / decisions awaiting input
 
