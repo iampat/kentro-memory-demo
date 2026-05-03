@@ -28,6 +28,8 @@ future ruleset has overlapping wildcard and specific rules with conflicting deci
 revisit the combining algorithm before relying on a particular outcome.
 """
 
+from pydantic import BaseModel, ConfigDict
+
 from kentro.types import (
     EntityVisibilityRule,
     FieldReadRule,
@@ -35,7 +37,6 @@ from kentro.types import (
     RuleSet,
     WriteRule,
 )
-from pydantic import BaseModel, ConfigDict
 
 
 class AclDecision(BaseModel):

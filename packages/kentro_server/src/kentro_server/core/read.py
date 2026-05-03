@@ -11,6 +11,7 @@ The function is pure-Python (no FastAPI). The HTTP route is a thin wrapper.
 import json
 import logging
 
+from kentro.acl import evaluate_entity_visibility, evaluate_field_read
 from kentro.types import (
     EntityRecord,
     FieldStatus,
@@ -22,7 +23,6 @@ from kentro.types import (
 )
 from sqlmodel import col, select
 
-from kentro_server.core.acl import evaluate_entity_visibility, evaluate_field_read
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.skills.llm_client import LLMClient

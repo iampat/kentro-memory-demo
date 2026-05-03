@@ -12,6 +12,12 @@ Re-exports the user-facing surface so the canonical example works:
         record = client.read("Customer", "Acme")
 """
 
+from kentro.acl import (
+    AclDecision,
+    evaluate_entity_visibility,
+    evaluate_field_read,
+    evaluate_write,
+)
 from kentro.client import (
     AdminRequiredError,
     AuthError,
@@ -56,10 +62,24 @@ from kentro.types import (
     WriteRule,
     WriteStatus,
 )
+from kentro.viz import (
+    AccessMatrix,
+    AccessMatrixCell,
+    ConflictsView,
+    LineageView,
+    RuleDiffView,
+    access_matrix,
+    conflicts_from_records,
+    lineage,
+    rule_diff,
+)
 
 __version__ = "0.0.0"
 
 __all__ = [
+    "AccessMatrix",
+    "AccessMatrixCell",
+    "AclDecision",
     "AdminRequiredError",
     "Agent",
     "AuthError",
@@ -67,6 +87,7 @@ __all__ = [
     "Client",
     "Conflict",
     "ConflictRule",
+    "ConflictsView",
     "Entity",
     "EntityRecord",
     "EntityTypeDef",
@@ -81,6 +102,7 @@ __all__ = [
     "KentroError",
     "LatestWriteResolver",
     "LineageRecord",
+    "LineageView",
     "NLIntent",
     "NLResponse",
     "NotFoundError",
@@ -89,6 +111,7 @@ __all__ = [
     "ReevaluationReport",
     "Resolver",
     "Rule",
+    "RuleDiffView",
     "RuleSet",
     "RuleSetDiff",
     "SchemaEvolutionError",
@@ -98,7 +121,14 @@ __all__ = [
     "WriteRule",
     "WriteStatus",
     "__version__",
+    "access_matrix",
+    "conflicts_from_records",
     "entity_type_def_from",
+    "evaluate_entity_visibility",
+    "evaluate_field_read",
+    "evaluate_write",
+    "lineage",
     "render_rule",
+    "rule_diff",
     "ruleset_diff",
 ]

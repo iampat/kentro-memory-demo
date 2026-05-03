@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 
 import pytest
+from kentro.acl import evaluate_field_read
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     AutoResolverSpec,
@@ -35,7 +36,6 @@ from kentro.types import (
     RuleSet,
     SkillResolverSpec,
 )
-from kentro_server.core.acl import evaluate_field_read
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.core.source_removal import remove_document
