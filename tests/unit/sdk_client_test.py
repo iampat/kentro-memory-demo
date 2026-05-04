@@ -32,7 +32,7 @@ from kentro_server.skills.llm_client import (
     ExtractionResult,
     NLIntentItem,
     NLIntentList,
-    ParsedRule,
+    ParsedRules,
 )
 
 from tests.unit._helpers import ADMIN_KEY, AGENT_KEY, FakeLLM
@@ -190,13 +190,15 @@ def test_parse_nl_to_ruleset_via_sdk(routed_test_client: TestClient, fake_llm: F
             intents=(NLIntentItem(kind="field_read", description="redact deal_size"),)
         )
         fake_llm.nl_rules = [
-            ParsedRule(
-                rule_json=FieldReadRule(
-                    agent_id="ingestion_agent",
-                    entity_type="Customer",
-                    field_name="deal_size",
-                    allowed=False,
-                ).model_dump_json(),
+            ParsedRules(
+                rule_jsons=(
+                    FieldReadRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=False,
+                    ).model_dump_json(),
+                ),
                 reason="ok",
             )
         ]
@@ -220,8 +222,66 @@ def _grant_full_ingestion_access(c: kentro.Client) -> None:
                     agent_id="ingestion_agent", entity_type="Customer", allowed=True
                 ),
                 EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
-                WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-                WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="name",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="contact",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="deal_size",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="sales_notes",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="support_tickets",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Note",
+                    field_name="subject",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Note",
+                    field_name="predicate",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Note",
+                    field_name="object_json",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Note",
+                    field_name="confidence",
+                    allowed=True,
+                ),
+                WriteRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Note",
+                    field_name="source_label",
+                    allowed=True,
+                ),
                 FieldReadRule(
                     agent_id="ingestion_agent",
                     entity_type="Customer",

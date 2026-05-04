@@ -44,6 +44,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from kentro_server.api.auth import Principal
 from kentro_server.core.read import read_entity
+from kentro_server.core.resolvers import load_active_resolver_policies
 from kentro_server.core.rules import apply_ruleset, load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.core.write import write_field, write_fields_bulk
@@ -266,6 +267,7 @@ def _register_tools(mcp: FastMCP) -> None:
             store=ctx.principal.store,
             schema=schema,
             ruleset=ruleset,
+            resolver_policies=load_active_resolver_policies(ctx.principal.store),
             agent_id=ctx.principal.agent_id,
             entity_type=entity_type,
             entity_key=entity_key,

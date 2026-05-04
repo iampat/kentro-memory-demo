@@ -9,15 +9,33 @@ Tests that need fixtures (which only need to be referenced by name in argument
 lists, not imported) get them from `conftest.py`.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from kentro.types import WriteRule
 from kentro_server.skills.llm_client import (
     ExtractionResult,
     LLMClient,
     NLIntentList,
-    ParsedRule,
+    ParsedRules,
     SkillResolverDecision,
 )
+
+
+def write_rules_for(agent_id: str, entity_type: str, fields: Iterable[str]) -> list[WriteRule]:
+    """PR 35: WriteRule.field_name is required (wildcards retired). Tests that
+    used to write `WriteRule(agent_id=..., entity_type=...)` (wildcard)
+    expand through this helper into one rule per field."""
+    return [
+        WriteRule(agent_id=agent_id, entity_type=entity_type, field_name=f, allowed=True)
+        for f in fields
+    ]
+
+
+# Field lists for the demo's seed entity types — used by tests that need a
+# permissive write grant for the ingestion_agent.
+CUSTOMER_FIELDS = ("name", "contact", "deal_size", "sales_notes", "support_tickets")
+NOTE_FIELDS = ("subject", "predicate", "object_json", "confidence", "source_label")
 
 # Two known-good keys for the standard test tenants.json (see conftest).
 # `tests/unit/conftest.py::tenants_json_with_admin` writes a tenants.json with:
@@ -36,14 +54,14 @@ class FakeLLM(LLMClient):
         fake = FakeLLM()
         fake.extraction_result = ExtractionResult(entities=(...,))
         fake.nl_intents = NLIntentList(intents=(...,))
-        fake.nl_rules = [ParsedRule(rule_json=..., reason=...)]
+        fake.nl_rules = [ParsedRules(rule_jsons=("...",), reason=...)]
 
     Counters track inner-call counts for assertions about caching, retries, etc.
     """
 
     extraction_result: ExtractionResult | None = None
     nl_intents: NLIntentList = field(default_factory=lambda: NLIntentList(intents=()))
-    nl_rules: list[ParsedRule] = field(default_factory=list)
+    nl_rules: list[ParsedRules] = field(default_factory=list)
     skill_decision: SkillResolverDecision = field(
         default_factory=lambda: SkillResolverDecision(
             chosen_value_json=None,
@@ -80,8 +98,15 @@ class FakeLLM(LLMClient):
     ):
         self.rule_calls += 1
         if not self.nl_rules:
-            return ParsedRule(rule_json=None, reason="fake LLM out of scripted rules")
+            return ParsedRules(rule_jsons=(), reason="fake LLM out of scripted rules")
         return self.nl_rules.pop(0)
 
 
-__all__ = ["ADMIN_KEY", "AGENT_KEY", "FakeLLM"]
+__all__ = [
+    "ADMIN_KEY",
+    "AGENT_KEY",
+    "CUSTOMER_FIELDS",
+    "FakeLLM",
+    "NOTE_FIELDS",
+    "write_rules_for",
+]

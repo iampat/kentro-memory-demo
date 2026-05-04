@@ -1,106 +1,129 @@
-"""Canonical initial demo ruleset — the ACL state Scene 1 begins from.
+"""Canonical initial demo ruleset + resolver policies — the state Scene 1
+begins from.
 
-Used by `kentro-server seed-demo` (CLI) and the upcoming `POST /demo/seed` route
-(in PR 10-4) so both paths produce the same starting world. Mirrors the rules
-the prototype's `data.js::initialPolicies` ships, expressed as typed `Rule`s.
+Used by `kentro-server seed-demo` (CLI) and `POST /demo/seed` so both paths
+produce the same starting world. Mirrors the prototype's `data.js::
+initialPolicies`, expressed as typed `Rule`s + `ResolverPolicy`s.
 
 Scene-by-scene narrative (per `demo.md`):
-  - Scene 1: Sales reads all Customer fields; CS sees only contact info; AuditLog
-    is hidden from Sales; conflicts resolve latest-write.
+  - Scene 1: Sales reads all Customer fields; CS sees only contact info;
+    AuditLog is hidden from Sales; conflicts resolve latest-write.
   - Scene 4 onwards: admin tightens rules through the policy editor (deal_size
     redacted from CS; written-vs-verbal SkillResolver). Those changes are NOT
     seeded — the demo applies them live during the walk-through.
 
-Plus: the `ingestion_agent` (admin) needs grants for writing every demo entity
-type so `POST /documents` actually persists field writes (default-deny ACL
-otherwise rejects the writes; the schema-aware extractor would populate field
-values that the write path would silently drop).
+Per PR 35: wildcard write rules are no longer supported (`WriteRule.field_name`
+is required), so the seed enumerates a `WriteRule` per (agent, entity, field).
+Resolvers live in `initial_demo_resolvers()` — separate from the ACL ruleset.
 """
 
 from kentro.types import (
-    ConflictRule,
     EntityVisibilityRule,
     FieldReadRule,
     LatestWriteResolverSpec,
+    ResolverPolicy,
+    ResolverPolicySet,
+    Rule,
     RuleSet,
     WriteRule,
 )
 
-# Canonical Customer fields used by the demo. Kept in lockstep with the Customer
-# schema in `kentro_server.demo.schemas`. Hardcoded here (not introspected) so the
-# ruleset stays declarative; if the schema gains a field that needs different
-# ACL than the default, add it explicitly here.
-_CUSTOMER_FIELDS_FOR_SALES = ("name", "contact", "deal_size", "sales_notes", "support_tickets")
+# Canonical Customer fields used by the demo. Kept in lockstep with the
+# Customer schema in `kentro_server.demo.schemas`.
+_CUSTOMER_FIELDS = ("name", "contact", "deal_size", "sales_notes", "support_tickets")
 _CUSTOMER_FIELDS_FOR_CS = ("name", "contact", "support_tickets")
 
-# Mirror set for the ingestion agent (writes every Customer field via /documents).
-_CUSTOMER_FIELDS_INGESTION = _CUSTOMER_FIELDS_FOR_SALES
+# Per-type field lists for the per-field WriteRule expansion below. Only
+# entity types whose fields the ingestion_agent must persist need entries here;
+# we don't write Person/AuditLog/Note in the seed corpus.
+_DEAL_FIELDS = ("customer", "size", "stage")
+_PERSON_FIELDS = ("full_name", "email")
+_AUDITLOG_FIELDS = ("event_type", "subject_id", "occurred_at")
+_NOTE_FIELDS = ("subject", "predicate", "object_json", "confidence", "source_label")
+
+
+def _expand_write_rules(agent_id: str, entity_type: str, fields: tuple[str, ...]) -> list[Rule]:
+    """One WriteRule per (agent, entity_type, field) — wildcards retired."""
+    return [
+        WriteRule(agent_id=agent_id, entity_type=entity_type, field_name=f, allowed=True)
+        for f in fields
+    ]
 
 
 def initial_demo_ruleset() -> RuleSet:
-    """Return the Scene-1 starting ruleset for the demo tenant.
+    """Return the Scene-1 ACL ruleset for the demo tenant. Resolvers are
+    separate — see `initial_demo_resolvers()`."""
+    rules: list[Rule] = []
 
-    Idempotent — the rules carry no timestamps; calling `POST /rules/apply` with
-    this ruleset twice produces version 1 then version 2 with identical content
-    (server stores them as separate snapshots; client-side `viz.ruleset_diff()`
-    will say nothing changed).
-    """
-    rules = (
-        # === Ingestion grants ============================================
-        # The admin / ingestion_agent needs write everywhere to persist
-        # extracted facts. Default-deny otherwise drops them silently.
-        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Person", allowed=True),
-        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Deal", allowed=True),
-        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="AuditLog", allowed=True),
-        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Person", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Deal", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="AuditLog", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
-        # Ingestion agent also reads everything (so the Network tab shows
-        # populated entities when the demoer toggles to the admin view).
-        *(
-            FieldReadRule(
-                agent_id="ingestion_agent", entity_type="Customer", field_name=f, allowed=True
-            )
-            for f in _CUSTOMER_FIELDS_INGESTION
-        ),
-        # === Sales — reads every Customer field (Scene 1 baseline) =====
-        EntityVisibilityRule(agent_id="sales", entity_type="Customer", allowed=True),
-        EntityVisibilityRule(agent_id="sales", entity_type="Deal", allowed=True),
-        *(
-            FieldReadRule(agent_id="sales", entity_type="Customer", field_name=f, allowed=True)
-            for f in _CUSTOMER_FIELDS_FOR_SALES
-        ),
-        # AuditLog is hidden from Sales — this is the "audit trail isn't a
-        # place for Sales to read manager-level operational signals" rule.
-        EntityVisibilityRule(agent_id="sales", entity_type="AuditLog", allowed=False),
-        # === Customer Service — reads only contact-shaped fields ========
-        EntityVisibilityRule(agent_id="customer_service", entity_type="Customer", allowed=True),
-        EntityVisibilityRule(agent_id="customer_service", entity_type="AuditLog", allowed=True),
-        *(
-            FieldReadRule(
-                agent_id="customer_service",
-                entity_type="Customer",
-                field_name=f,
-                allowed=True,
-            )
-            for f in _CUSTOMER_FIELDS_FOR_CS
-        ),
-        # === Conflict resolution (Scene 1 baseline) =====================
-        # Per `demo.md` cell 12: under the initial mechanical rule, latest-write wins.
-        # Scene 4 swaps this for a SkillResolver via the live policy editor. Other
-        # fields fall through to AutoResolver in the read path → AutoResolver in
-        # turn falls back to LatestWriteResolver when no ConflictRule matches.
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=LatestWriteResolverSpec(),
-        ),
+    # === Ingestion grants ===
+    # ingestion_agent is a non-admin worker that writes extracted facts. It
+    # needs explicit per-field WriteRules everywhere it persists data, plus
+    # entity-visibility allows.
+    for etype in ("Customer", "Person", "Deal", "AuditLog", "Note"):
+        rules.append(
+            EntityVisibilityRule(agent_id="ingestion_agent", entity_type=etype, allowed=True)
+        )
+    rules.extend(_expand_write_rules("ingestion_agent", "Customer", _CUSTOMER_FIELDS))
+    rules.extend(_expand_write_rules("ingestion_agent", "Person", _PERSON_FIELDS))
+    rules.extend(_expand_write_rules("ingestion_agent", "Deal", _DEAL_FIELDS))
+    rules.extend(_expand_write_rules("ingestion_agent", "AuditLog", _AUDITLOG_FIELDS))
+    rules.extend(_expand_write_rules("ingestion_agent", "Note", _NOTE_FIELDS))
+    # ingestion_agent reads everything it writes (used by the upstream
+    # extractor's de-dupe + lineage paths).
+    rules.extend(
+        FieldReadRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name=f, allowed=True
+        )
+        for f in _CUSTOMER_FIELDS
     )
-    return RuleSet(rules=rules)
+
+    # === Sales ===
+    rules.append(EntityVisibilityRule(agent_id="sales", entity_type="Customer", allowed=True))
+    rules.append(EntityVisibilityRule(agent_id="sales", entity_type="Deal", allowed=True))
+    rules.extend(
+        FieldReadRule(agent_id="sales", entity_type="Customer", field_name=f, allowed=True)
+        for f in _CUSTOMER_FIELDS
+    )
+    # AuditLog is hidden from Sales.
+    rules.append(EntityVisibilityRule(agent_id="sales", entity_type="AuditLog", allowed=False))
+
+    # === Customer Service ===
+    rules.append(
+        EntityVisibilityRule(agent_id="customer_service", entity_type="Customer", allowed=True)
+    )
+    rules.append(
+        EntityVisibilityRule(agent_id="customer_service", entity_type="AuditLog", allowed=True)
+    )
+    rules.extend(
+        FieldReadRule(
+            agent_id="customer_service",
+            entity_type="Customer",
+            field_name=f,
+            allowed=True,
+        )
+        for f in _CUSTOMER_FIELDS_FOR_CS
+    )
+
+    return RuleSet(rules=tuple(rules))
 
 
-__all__ = ["initial_demo_ruleset"]
+def initial_demo_resolvers() -> ResolverPolicySet:
+    """Return the Scene-1 resolver policies. Per `demo.md` cell 12: under the
+    initial mechanical rule, Customer.deal_size resolves latest-write. Scene 4
+    swaps this for a SkillResolver via the live LineageDrawer editor.
+
+    Other fields with no policy fall through to AutoResolver → LatestWrite at
+    read time.
+    """
+    return ResolverPolicySet(
+        policies=(
+            ResolverPolicy(
+                entity_type="Customer",
+                field_name="deal_size",
+                resolver=LatestWriteResolverSpec(),
+            ),
+        )
+    )
+
+
+__all__ = ["initial_demo_resolvers", "initial_demo_ruleset"]

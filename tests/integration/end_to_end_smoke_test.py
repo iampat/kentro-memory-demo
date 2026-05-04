@@ -31,8 +31,9 @@ from kentro.acl import evaluate_field_read
 from kentro.schema import entity_type_def_from
 from kentro.types import (
     AutoResolverSpec,
-    ConflictRule,
     FieldStatus,
+    ResolverPolicy,
+    ResolverPolicySet,
     RuleSet,
     SkillResolverSpec,
 )
@@ -248,12 +249,13 @@ def test_full_demo_flow(tmp_path: Path) -> None:
     if len(open_conflicts) != 1:
         raise AssertionError(f"expected exactly one open conflict, got {len(open_conflicts)}")
 
-    # --- 3. Default AutoResolver (no ConflictRule) → LatestWrite picks the email ($300K). ---
+    # --- 3. Default AutoResolver (no ResolverPolicy) → LatestWrite picks the email ($300K). ---
     initial_ruleset = RuleSet(rules=(), version=1)
+    initial_policies = ResolverPolicySet(policies=(), version=1)
     auto = resolve(
         candidates=writes,
         spec=AutoResolverSpec(),
-        ruleset=initial_ruleset,
+        resolver_policies=initial_policies,
         entity_type="Customer",
         field_name="deal_size",
         llm=llm,
@@ -268,8 +270,8 @@ def test_full_demo_flow(tmp_path: Path) -> None:
     if not _is_around(auto_value, 300000):
         raise AssertionError(f"auto+default should pick ~300000 (latest), got {auto_value!r}")
 
-    # --- 4. Apply SkillResolver ConflictRule. The skill picks $300K with a real reason. ---
-    skill_rule = ConflictRule(
+    # --- 4. Apply SkillResolver ResolverPolicy. The skill picks $300K with a real reason. ---
+    skill_policy = ResolverPolicy(
         entity_type="Customer",
         field_name="deal_size",
         resolver=SkillResolverSpec(
@@ -280,11 +282,11 @@ def test_full_demo_flow(tmp_path: Path) -> None:
             ),
         ),
     )
-    skilled_ruleset = RuleSet(rules=(skill_rule,), version=2)
+    skilled_policies = ResolverPolicySet(policies=(skill_policy,), version=2)
     skilled = resolve(
         candidates=writes,
         spec=AutoResolverSpec(),
-        ruleset=skilled_ruleset,
+        resolver_policies=skilled_policies,
         entity_type="Customer",
         field_name="deal_size",
         llm=llm,
@@ -320,7 +322,7 @@ def test_full_demo_flow(tmp_path: Path) -> None:
     after_churn = resolve(
         candidates=surviving_writes,
         spec=AutoResolverSpec(),
-        ruleset=skilled_ruleset,
+        resolver_policies=skilled_policies,
         entity_type="Customer",
         field_name="deal_size",
         llm=llm,
@@ -340,7 +342,7 @@ def test_full_demo_flow(tmp_path: Path) -> None:
         entity_type="Customer",
         field_name="deal_size",
         agent_id="random_other",
-        ruleset=skilled_ruleset,
+        ruleset=initial_ruleset,
     )
     if acl_decision.allowed:
         raise AssertionError("default-deny ACL was not enforced")

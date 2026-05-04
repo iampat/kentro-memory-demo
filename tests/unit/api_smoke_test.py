@@ -33,10 +33,17 @@ from kentro_server.skills.llm_client import (
     ExtractionResult,
     NLIntentItem,
     NLIntentList,
-    ParsedRule,
+    ParsedRules,
 )
 
-from tests.unit._helpers import ADMIN_KEY, AGENT_KEY, FakeLLM
+from tests.unit._helpers import (
+    ADMIN_KEY,
+    AGENT_KEY,
+    CUSTOMER_FIELDS,
+    NOTE_FIELDS,
+    FakeLLM,
+    write_rules_for,
+)
 
 
 @pytest.fixture
@@ -71,8 +78,8 @@ def _grant_access_for_ingestion(client: TestClient) -> None:
     rules = (
         EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
         EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
+        *write_rules_for("ingestion_agent", "Customer", CUSTOMER_FIELDS),
+        *write_rules_for("ingestion_agent", "Note", NOTE_FIELDS),
         FieldReadRule(
             agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
         ),
@@ -299,7 +306,30 @@ def test_list_entities_returns_only_visible_keys(client: TestClient) -> None:
     # Permissive ruleset for ingestion + visibility on Acme for sales but not Globex.
     rules = (
         EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        WriteRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
+        ),
+        WriteRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="contact", allowed=True
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="deal_size",
+            allowed=True,
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="sales_notes",
+            allowed=True,
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="support_tickets",
+            allowed=True,
+        ),
         FieldReadRule(
             agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
         ),
@@ -408,12 +438,15 @@ def test_skill_action_notify_publishes_to_event_bus(
     must publish onto the EventBus when a /entities/{type}/{key}/read fires it.
 
     Setup: register Customer, write two conflicting deal_size values, apply a
-    ConflictRule(SkillResolver), script the FakeLLM to return a winner +
+    ResolverPolicy(SkillResolver), script the FakeLLM to return a winner +
     NotifyAction. Subscribe to the EventBus directly (in-process), trigger a
     POST /entities/.../read with the SkillResolverSpec, assert the event
     landed.
     """
-    from kentro.types import ConflictRule  # noqa: PLC0415 — test-local
+    from kentro.types import (  # noqa: PLC0415
+        ResolverPolicy,
+        SkillResolverSpec,
+    )
     from kentro_server.main import app  # noqa: PLC0415
     from kentro_server.skills.llm_client import (  # noqa: PLC0415
         NotifyAction,
@@ -434,9 +467,7 @@ def test_skill_action_notify_publishes_to_event_bus(
         },
     )
     _grant_access_for_ingestion(client)
-    # Apply conflict rule that uses SkillResolver
-    from kentro.types import SkillResolverSpec  # noqa: PLC0415
-
+    # Apply ACL rule for ingestion to read deal_size + a resolver policy.
     client.post(
         "/rules/apply",
         headers=_admin(),
@@ -446,20 +477,28 @@ def test_skill_action_notify_publishes_to_event_bus(
                     EntityVisibilityRule(
                         agent_id="ingestion_agent", entity_type="Customer", allowed=True
                     ),
-                    WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+                    *write_rules_for("ingestion_agent", "Customer", CUSTOMER_FIELDS),
                     FieldReadRule(
                         agent_id="ingestion_agent",
                         entity_type="Customer",
                         field_name="deal_size",
                         allowed=True,
                     ),
-                    ConflictRule(
-                        entity_type="Customer",
-                        field_name="deal_size",
-                        resolver=SkillResolverSpec(prompt="written outweighs verbal"),
-                    ),
                 )
             ).model_dump(mode="json"),
+        },
+    )
+    client.post(
+        "/resolvers/apply",
+        headers=_admin(),
+        json={
+            "policies": [
+                ResolverPolicy(
+                    entity_type="Customer",
+                    field_name="deal_size",
+                    resolver=SkillResolverSpec(prompt="written outweighs verbal"),
+                ).model_dump(mode="json")
+            ],
         },
     )
     # Two conflicting writes
@@ -560,7 +599,30 @@ def test_entity_visibility_denial_hides_all_fields(client: TestClient) -> None:
             agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
         ),
         EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
-        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        WriteRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
+        ),
+        WriteRule(
+            agent_id="ingestion_agent", entity_type="Customer", field_name="contact", allowed=True
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="deal_size",
+            allowed=True,
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="sales_notes",
+            allowed=True,
+        ),
+        WriteRule(
+            agent_id="ingestion_agent",
+            entity_type="Customer",
+            field_name="support_tickets",
+            allowed=True,
+        ),
         # Sales: field-read allows, BUT entity-visibility denies the specific
         # key — so every field on Customer:Acme should come back HIDDEN.
         FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
@@ -693,7 +755,36 @@ def test_remember_atomic_no_partial_writes_on_field_denial(client: TestClient) -
                     EntityVisibilityRule(
                         agent_id="ingestion_agent", entity_type="Note", allowed=True
                     ),
-                    WriteRule(agent_id="ingestion_agent", entity_type="Note", allowed=True),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="subject",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="predicate",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="object_json",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="confidence",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Note",
+                        field_name="source_label",
+                        allowed=True,
+                    ),
                     WriteRule(
                         agent_id="ingestion_agent",
                         entity_type="Note",
@@ -808,13 +899,15 @@ def test_rules_parse_via_fake_llm(client: TestClient, fake_llm: FakeLLM) -> None
         intents=(NLIntentItem(kind="field_read", description="redact deal_size from ingestion"),)
     )
     fake_llm.nl_rules = [
-        ParsedRule(
-            rule_json=FieldReadRule(
-                agent_id="ingestion_agent",
-                entity_type="Customer",
-                field_name="deal_size",
-                allowed=False,
-            ).model_dump_json(),
+        ParsedRules(
+            rule_jsons=(
+                FieldReadRule(
+                    agent_id="ingestion_agent",
+                    entity_type="Customer",
+                    field_name="deal_size",
+                    allowed=False,
+                ).model_dump_json(),
+            ),
             reason="ok",
         )
     ]

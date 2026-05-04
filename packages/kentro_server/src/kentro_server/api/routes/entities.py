@@ -26,6 +26,7 @@ from kentro_server.api.auth import PrincipalDep
 from kentro_server.api.deps import EventBusDep, LLMClientDep, SchemaRegistryDep
 from kentro_server.api.dtos import ReadRequest, WriteRequest
 from kentro_server.core.read import read_entity
+from kentro_server.core.resolvers import load_active_resolver_policies
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.write import write_field
 from kentro_server.store.models import EntityRow, FieldWriteRow
@@ -91,6 +92,7 @@ def get_entity(
         store=principal.store,
         schema=schema,
         ruleset=ruleset,
+        resolver_policies=load_active_resolver_policies(principal.store),
         agent_id=principal.agent_id,
         entity_type=entity_type,
         entity_key=entity_key,
@@ -117,6 +119,7 @@ def read(
         store=principal.store,
         schema=schema,
         ruleset=ruleset,
+        resolver_policies=load_active_resolver_policies(principal.store),
         agent_id=principal.agent_id,
         entity_type=entity_type,
         entity_key=entity_key,

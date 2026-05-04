@@ -14,9 +14,9 @@ two helpers are the substrate for the policy editor's:
 from dataclasses import dataclass
 
 from kentro.types import (
-    ConflictRule,
     EntityVisibilityRule,
     FieldReadRule,
+    ResolverPolicy,
     Rule,
     RuleSet,
     WriteRule,
@@ -85,9 +85,8 @@ def render_rule(rule: Rule) -> str:
             requires_approval=approval,
         ):
             tag = "[allow]" if allowed else "[deny] "
-            target = f"{etype}.{fname}" if fname is not None else f"{etype}.*"
             suffix = " (requires_approval)" if approval else ""
-            return f"{tag} {agent} writes {target}{suffix}"
+            return f"{tag} {agent} writes {etype}.{fname}{suffix}"
 
         case EntityVisibilityRule(
             agent_id=agent, entity_type=etype, entity_key=key, allowed=allowed
@@ -96,26 +95,34 @@ def render_rule(rule: Rule) -> str:
             target = f"{etype}/{key}" if key is not None else f"{etype}.*"
             return f"{tag} {agent} sees   {target}"
 
-        case ConflictRule(entity_type=etype, field_name=fname, resolver=resolver):
-            # ResolverSpec is a discriminated union with `type` field.
-            rtype = resolver.type
-            target = f"{etype}.{fname}"
-            match rtype:
-                case "skill":
-                    # SkillResolverSpec has prompt: str
-                    prompt = getattr(resolver, "prompt", "?")
-                    return f"[skill]  resolves     {target} → {prompt!r}"
-                case "prefer_agent":
-                    agent = getattr(resolver, "agent_id", "?")
-                    return f"[prefer] resolves     {target} (agent={agent})"
-                case "latest_write":
-                    return f"[latest] resolves     {target} (newest write wins)"
-                case "raw":
-                    return f"[raw]    resolves     {target} (always UNRESOLVED — caller decides)"
-                case "auto":
-                    return f"[auto]   resolves     {target} (delegates to active config)"
-                case _:
-                    return f"[?]      resolves     {target} (unknown resolver: {rtype})"
+
+def render_resolver_policy(policy: ResolverPolicy) -> str:
+    """One-line, human-readable rendering of a single ResolverPolicy.
+
+    Resolvers live alongside (but separate from) the ACL ruleset, so they
+    have their own renderer. Output mirrors the `render_rule` style:
+
+        [skill]  resolves Customer.deal_size → "written outweighs verbal"
+        [latest] resolves Customer.deal_size (newest write wins)
+        [prefer] resolves Customer.contact   (agent=sales)
+    """
+    rtype = policy.resolver.type
+    target = f"{policy.entity_type}.{policy.field_name}"
+    match rtype:
+        case "skill":
+            prompt = getattr(policy.resolver, "prompt", "?")
+            return f"[skill]  resolves     {target} → {prompt!r}"
+        case "prefer_agent":
+            agent = getattr(policy.resolver, "preferred_agent_id", "?")
+            return f"[prefer] resolves     {target} (agent={agent})"
+        case "latest_write":
+            return f"[latest] resolves     {target} (newest write wins)"
+        case "raw":
+            return f"[raw]    resolves     {target} (always UNRESOLVED — caller decides)"
+        case "auto":
+            return f"[auto]   resolves     {target} (delegates to active config)"
+        case _:
+            return f"[?]      resolves     {target} (unknown resolver: {rtype})"
 
 
 def render_rule_as_rego(rule: Rule) -> str:
@@ -203,15 +210,14 @@ def render_rule_as_rego(rule: Rule) -> str:
 
         case WriteRule(agent_id=agent, entity_type=etype, field_name=fname, allowed=allowed):
             verb = "allow" if allowed else "deny[msg]"
-            field_clause = f'\n  input.resource.field == "{fname}"' if fname is not None else ""
             msg_clause = '\n  msg := "write denied"' if not allowed else ""
             return (
                 "package kentro.access\n\n"
                 f"{verb} {{\n"
                 f'  input.role == "{agent}"\n'
                 '  input.action == "write"\n'
-                f'  input.resource.type == "{etype}"'
-                f"{field_clause}"
+                f'  input.resource.type == "{etype}"\n'
+                f'  input.resource.field == "{fname}"'
                 f"{msg_clause}\n"
                 "}"
             )
@@ -232,85 +238,6 @@ def render_rule_as_rego(rule: Rule) -> str:
                 "}"
             )
 
-        case ConflictRule(entity_type=etype, field_name=fname, resolver=resolver):
-            target = f"{etype}.{fname}"
-            match resolver.type:
-                case "skill":
-                    prompt = getattr(resolver, "prompt", "")
-                    # Heuristic: if the prompt mentions "written" explicitly,
-                    # render the demo's canonical written-vs-verbal Rego shape.
-                    # Otherwise fall back to a generic skill-driven snippet.
-                    if "written" in prompt.lower() and "verbal" in prompt.lower():
-                        return (
-                            "package kentro.resolve\n\n"
-                            f"# {target}: {prompt}\n"
-                            "resolved[field] = winner {\n"
-                            "  candidates := input.field.values\n"
-                            '  written := [c | c := candidates[_]; c.sourceClass == "written"]\n'
-                            "  count(written) > 0\n"
-                            "  winner := latest(written)\n"
-                            "}\n\n"
-                            "resolved[field] = winner {\n"
-                            "  candidates := input.field.values\n"
-                            '  written := [c | c := candidates[_]; c.sourceClass == "written"]\n'
-                            "  count(written) == 0\n"
-                            "  winner := latest(candidates)\n"
-                            "}"
-                        )
-                    return (
-                        "package kentro.resolve\n\n"
-                        f'# {target}: skill-driven resolution — "{prompt}"\n'
-                        "resolved[field] = winner {\n"
-                        "  candidates := input.field.values\n"
-                        "  winner := skill_pick(candidates)\n"
-                        "}"
-                    )
-                case "prefer_agent":
-                    agent_id = getattr(resolver, "agent_id", "")
-                    return (
-                        "package kentro.resolve\n\n"
-                        f"# {target}: prefer agent={agent_id}, fall back to latest\n"
-                        "resolved[field] = winner {\n"
-                        "  candidates := input.field.values\n"
-                        f'  preferred := [c | c := candidates[_]; c.agent == "{agent_id}"]\n'
-                        "  count(preferred) > 0\n"
-                        "  winner := latest(preferred)\n"
-                        "}"
-                    )
-                case "latest_write":
-                    return (
-                        "package kentro.resolve\n\n"
-                        f"# {target}: latest write wins (mechanical)\n"
-                        "resolved[field] = winner {\n"
-                        "  candidates := input.field.values\n"
-                        "  winner := candidates[_]\n"
-                        "  not exists_newer(winner, candidates)\n"
-                        "}"
-                    )
-                case "raw":
-                    return (
-                        "package kentro.resolve\n\n"
-                        f"# {target}: raw — no winner picked, caller decides\n"
-                        "unresolved[field] = candidates {\n"
-                        "  candidates := input.field.values\n"
-                        "  count(candidates) > 1\n"
-                        "}"
-                    )
-                case "auto":
-                    return (
-                        "package kentro.resolve\n\n"
-                        f"# {target}: auto — delegates to the active ConflictRule for this field;\n"
-                        "# falls back to LatestWriteResolver if none is configured.\n"
-                        "resolved[field] = winner {\n"
-                        "  rule := active_conflict_rule(input.field.entity_type, input.field.name)\n"
-                        "  winner := apply_resolver(rule.resolver, input.field.values)\n"
-                        "}"
-                    )
-                case _:
-                    return (
-                        "package kentro.resolve\n\n"
-                        f"# {target}: unknown resolver type {resolver.type!r}\n"
-                    )
         case _:
             raise TypeError(f"render_rule_as_rego: unknown rule type {type(rule).__name__}")
 
@@ -338,14 +265,14 @@ def render_rule_as_rego_body(rule: Rule) -> str:
 
 
 def rule_package_for(rule: Rule) -> str:
-    """Return the Rego package the rule belongs to. Mirrors `render_rule_as_rego`'s
-    per-variant choice (currently `kentro.access` for access rules and
-    `kentro.resolve` for ConflictRule)."""
-    return "kentro.resolve" if isinstance(rule, ConflictRule) else "kentro.access"
+    """Return the Rego package the rule belongs to. With resolvers retired
+    from the Rule union (PR 35), every Rule variant is access-related."""
+    return "kentro.access"
 
 
 __all__ = [
     "RuleSetDiff",
+    "render_resolver_policy",
     "render_rule",
     "render_rule_as_rego",
     "render_rule_as_rego_body",

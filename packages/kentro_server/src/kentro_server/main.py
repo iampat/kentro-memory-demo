@@ -27,6 +27,7 @@ from kentro_server.api import (
     entities_router,
     events_router,
     memory_router,
+    resolvers_router,
     rules_router,
     schema_router,
     viz_router,
@@ -38,6 +39,7 @@ from kentro_server.demo import (
     Deal,
     Person,
     infer_source_class,
+    initial_demo_resolvers,
     initial_demo_ruleset,
 )
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
@@ -188,6 +190,7 @@ app = FastAPI(title="kentro-server", version=__version__, lifespan=lifespan)
 app.include_router(documents_router)
 app.include_router(entities_router)
 app.include_router(rules_router)
+app.include_router(resolvers_router)
 app.include_router(schema_router)
 app.include_router(memory_router)
 app.include_router(demo_router)
@@ -382,7 +385,21 @@ def seed_demo(
         version = r.json().get("version", "?")
         console.print(
             f"[green]applied demo ruleset[/green] (version {version}, "
-            f"{len(ruleset.rules)} rules — sales/cs/auditlog access + latest-write)"
+            f"{len(ruleset.rules)} rules — sales/cs/auditlog access)"
+        )
+
+        # Resolvers are stored separately. Same `/rules/apply` admin gate
+        # applies upstream; here we POST through the resolvers route.
+        resolvers = initial_demo_resolvers()
+        body = {"policies": [p.model_dump(mode="json") for p in resolvers.policies]}
+        r = httpx.post(f"{base}/resolvers/apply", headers=headers, json=body, timeout=10.0)
+        if r.status_code != 200:
+            console.print(f"[red]/resolvers/apply failed[/red] {r.status_code}: {r.text}")
+            raise typer.Exit(code=1)
+        rv = r.json().get("version", "?")
+        console.print(
+            f"[green]applied demo resolvers[/green] (version {rv}, "
+            f"{len(resolvers.policies)} policies — Customer.deal_size latest-write)"
         )
 
     if skip_ingest:
@@ -489,7 +506,7 @@ def smoke_test(
     permissive = RuleSet(
         rules=(
             EntityVisibilityRule(agent_id=agent_id, entity_type="Customer", allowed=True),
-            WriteRule(agent_id=agent_id, entity_type="Customer", allowed=True),
+            WriteRule(agent_id=agent_id, entity_type="Customer", field_name="name", allowed=True),
             FieldReadRule(
                 agent_id=agent_id, entity_type="Customer", field_name="name", allowed=True
             ),

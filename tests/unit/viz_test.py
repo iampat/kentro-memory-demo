@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from kentro.types import (
-    ConflictRule,
     EntityRecord,
     EntityTypeDef,
     EntityVisibilityRule,
@@ -15,7 +14,6 @@ from kentro.types import (
     FieldValueCandidate,
     LineageRecord,
     RuleSet,
-    SkillResolverSpec,
     WriteRule,
 )
 from kentro.viz import (
@@ -111,34 +109,25 @@ def test_rule_diff_groups_by_type() -> None:
     keep_field = FieldReadRule(
         agent_id="sales", entity_type="Customer", field_name="name", allowed=True
     )
-    add_write = WriteRule(agent_id="sales", entity_type="Customer", allowed=True)
-    drop_visibility = EntityVisibilityRule(agent_id="cs", entity_type="Customer", allowed=False)
-    add_conflict = ConflictRule(
-        entity_type="Customer",
-        field_name="deal_size",
-        resolver=SkillResolverSpec(prompt="x"),
+    add_write = WriteRule(
+        agent_id="sales", entity_type="Customer", field_name="name", allowed=True
     )
+    drop_visibility = EntityVisibilityRule(agent_id="cs", entity_type="Customer", allowed=False)
 
     diff = rule_diff(
         old=RuleSet(rules=(keep_field, drop_visibility)),
-        new=RuleSet(rules=(keep_field, add_write, add_conflict)),
+        new=RuleSet(rules=(keep_field, add_write)),
     )
 
     by_type = {s.rule_type: s for s in diff.sections}
-    # field_read had keep_field unchanged on both sides
     if by_type["field_read"].unchanged != (keep_field,):
         raise AssertionError(f"field_read unchanged wrong: {by_type['field_read']}")
-    # write had add_write added
     if by_type["write"].added != (add_write,):
         raise AssertionError(f"write added wrong: {by_type['write']}")
-    # entity_visibility had drop_visibility removed
     if by_type["entity_visibility"].removed != (drop_visibility,):
         raise AssertionError(f"visibility removed wrong: {by_type['entity_visibility']}")
-    # conflict had add_conflict added
-    if by_type["conflict"].added != (add_conflict,):
-        raise AssertionError(f"conflict added wrong: {by_type['conflict']}")
 
-    if diff.total_added != 2 or diff.total_removed != 1:
+    if diff.total_added != 1 or diff.total_removed != 1:
         raise AssertionError(f"summary counts wrong: +{diff.total_added} -{diff.total_removed}")
 
 

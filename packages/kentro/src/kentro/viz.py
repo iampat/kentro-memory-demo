@@ -171,8 +171,9 @@ class RuleDiffSection:
 
 @dataclass(frozen=True)
 class RuleDiffView:
-    """Rule diff grouped by rule type. Sections appear in a fixed order matching
-    Decision 2.5's by-type panel: field_read, entity_visibility, write, conflict.
+    """Rule diff grouped by rule type. Sections appear in a fixed order:
+    field_read, entity_visibility, write. (Resolver policies live in
+    `ResolverPolicySet`, not the rule diff — see PR 35.)
 
     `total_added`/`total_removed` are convenient summary counts — UI shows them
     in the panel header ("v3 → v4: +2 −1").
@@ -183,9 +184,8 @@ class RuleDiffView:
     total_removed: int
 
 
-_RULE_TYPE_ORDER = ("field_read", "entity_visibility", "write", "conflict")
-"""Display order for the by-type panel. Matches the IMPLEMENTATION_PLAN
-Decision 2.5 sectioning."""
+_RULE_TYPE_ORDER = ("field_read", "entity_visibility", "write")
+"""Display order for the by-type panel."""
 
 
 def rule_diff(old: RuleSet, new: RuleSet) -> RuleDiffView:

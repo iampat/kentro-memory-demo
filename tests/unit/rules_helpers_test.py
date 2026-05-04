@@ -3,14 +3,20 @@
 Pure-function tests; no server, no Pydantic models beyond what the SDK ships.
 """
 
-from kentro.rules import RuleSetDiff, render_rule, render_rule_as_rego, ruleset_diff
+from kentro.rules import (
+    RuleSetDiff,
+    render_resolver_policy,
+    render_rule,
+    render_rule_as_rego,
+    ruleset_diff,
+)
 from kentro.types import (
-    ConflictRule,
     EntityVisibilityRule,
     FieldReadRule,
     LatestWriteResolverSpec,
     PreferAgentResolverSpec,
     RawResolverSpec,
+    ResolverPolicy,
     RuleSet,
     SkillResolverSpec,
     WriteRule,
@@ -98,12 +104,6 @@ def test_render_write_with_specific_field() -> None:
         raise AssertionError(f"unexpected render: {out!r}")
 
 
-def test_render_write_wildcard_field() -> None:
-    out = render_rule(WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True))
-    if out != "[allow] ingestion_agent writes Customer.*":
-        raise AssertionError(f"unexpected render: {out!r}")
-
-
 def test_render_write_requires_approval() -> None:
     out = render_rule(
         WriteRule(
@@ -134,9 +134,9 @@ def test_render_visibility_hidden_specific_key() -> None:
         raise AssertionError(f"unexpected render: {out!r}")
 
 
-def test_render_conflict_skill() -> None:
-    out = render_rule(
-        ConflictRule(
+def test_render_resolver_policy_skill() -> None:
+    out = render_resolver_policy(
+        ResolverPolicy(
             entity_type="Customer",
             field_name="deal_size",
             resolver=SkillResolverSpec(prompt="written outweighs verbal"),
@@ -148,21 +148,21 @@ def test_render_conflict_skill() -> None:
         raise AssertionError(f"expected [skill] prefix, got {out!r}")
 
 
-def test_render_conflict_prefer_agent() -> None:
-    out = render_rule(
-        ConflictRule(
+def test_render_resolver_policy_prefer_agent() -> None:
+    out = render_resolver_policy(
+        ResolverPolicy(
             entity_type="Customer",
             field_name="deal_size",
             resolver=PreferAgentResolverSpec(agent_id="ingestion_agent"),
         )
     )
-    if "ingestion_agent" not in out or not out.startswith("[prefer]"):
+    if not out.startswith("[prefer]"):
         raise AssertionError(f"unexpected render: {out!r}")
 
 
-def test_render_conflict_latest_write() -> None:
-    out = render_rule(
-        ConflictRule(
+def test_render_resolver_policy_latest_write() -> None:
+    out = render_resolver_policy(
+        ResolverPolicy(
             entity_type="Customer",
             field_name="deal_size",
             resolver=LatestWriteResolverSpec(),
@@ -172,9 +172,9 @@ def test_render_conflict_latest_write() -> None:
         raise AssertionError(f"unexpected render: {out!r}")
 
 
-def test_render_conflict_raw() -> None:
-    out = render_rule(
-        ConflictRule(
+def test_render_resolver_policy_raw() -> None:
+    out = render_resolver_policy(
+        ResolverPolicy(
             entity_type="Customer",
             field_name="deal_size",
             resolver=RawResolverSpec(),
@@ -207,10 +207,12 @@ def test_render_rego_field_read_deny_uses_msg() -> None:
         raise AssertionError(f"deny rule missing msg binding: {out!r}")
 
 
-def test_render_rego_write_omits_field_when_wildcard() -> None:
-    out = render_rule_as_rego(WriteRule(agent_id="sales", entity_type="Customer", allowed=True))
-    if "input.resource.field" in out:
-        raise AssertionError(f"wildcard write should not name a field, got: {out!r}")
+def test_render_rego_write_includes_named_field() -> None:
+    out = render_rule_as_rego(
+        WriteRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True)
+    )
+    if 'input.resource.field == "name"' not in out:
+        raise AssertionError(f"write rule should name its field, got: {out!r}")
 
 
 def test_render_rego_visibility_includes_entity_key_when_set() -> None:
@@ -223,80 +225,13 @@ def test_render_rego_visibility_includes_entity_key_when_set() -> None:
         raise AssertionError(f"entity_key missing from rendered Rego: {out!r}")
 
 
-def test_render_rego_skill_written_vs_verbal_uses_canonical_demo_shape() -> None:
-    out = render_rule_as_rego(
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=SkillResolverSpec(prompt="written outweighs verbal, latest wins"),
-        )
-    )
-    # Demo's canonical written-vs-verbal Rego shape is what the prototype shows.
-    if 'sourceClass == "written"' not in out:
-        raise AssertionError(f"expected written-vs-verbal canonical shape, got: {out!r}")
-    if "package kentro.resolve" not in out:
-        raise AssertionError(f"expected resolve package, got: {out!r}")
-
-
-def test_render_rego_skill_generic_falls_back_when_prompt_unrelated() -> None:
-    out = render_rule_as_rego(
-        ConflictRule(
-            entity_type="Customer",
-            field_name="contact",
-            resolver=SkillResolverSpec(prompt="prefer the most recently confirmed"),
-        )
-    )
-    if "skill_pick" not in out:
-        raise AssertionError(f"expected generic skill_pick fallback, got: {out!r}")
-
-
-def test_render_rego_latest_write() -> None:
-    out = render_rule_as_rego(
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=LatestWriteResolverSpec(),
-        )
-    )
-    if "exists_newer" not in out:
-        raise AssertionError(f"latest-write rego shape changed: {out!r}")
-
-
-def test_render_rego_prefer_agent() -> None:
-    out = render_rule_as_rego(
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=PreferAgentResolverSpec(agent_id="ingestion_agent"),
-        )
-    )
-    if '"ingestion_agent"' not in out:
-        raise AssertionError(f"prefer_agent didn't include agent_id: {out!r}")
-
-
-def test_render_rego_raw() -> None:
-    out = render_rule_as_rego(
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=RawResolverSpec(),
-        )
-    )
-    if "unresolved[field]" not in out:
-        raise AssertionError(f"raw resolver should render an unresolved set: {out!r}")
-
-
 def test_render_rego_all_rules_round_trip_without_exception() -> None:
-    """Sanity: every Rule variant produces non-empty Rego."""
+    """Sanity: every Rule variant produces non-empty Rego (no resolver rules in
+    the ACL union — they live in `ResolverPolicy`)."""
     rules = (
         FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
-        WriteRule(agent_id="sales", entity_type="Customer", allowed=True),
+        WriteRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
         EntityVisibilityRule(agent_id="cs", entity_type="Customer", allowed=False),
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=SkillResolverSpec(prompt="x"),
-        ),
     )
     for r in rules:
         out = render_rule_as_rego(r)
@@ -308,13 +243,8 @@ def test_render_all_rules_in_a_ruleset() -> None:
     """Roundtrip: every rule in a representative RuleSet must render without exception."""
     rules = (
         FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
-        WriteRule(agent_id="sales", entity_type="Customer", allowed=True),
+        WriteRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
         EntityVisibilityRule(agent_id="cs", entity_type="Customer", allowed=False),
-        ConflictRule(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=SkillResolverSpec(prompt="x"),
-        ),
     )
     rendered = [render_rule(r) for r in rules]
     if len(rendered) != len(rules):

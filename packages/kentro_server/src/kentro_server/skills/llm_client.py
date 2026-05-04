@@ -164,7 +164,7 @@ class ExtractionResult(BaseModel):
 # which requires a Pydantic *model* as the response schema — `instructor` cannot
 # bind a bare list as the top-level type. Hence the `NLIntentList` wrapper.
 #
-# `ParsedRule.rule_json` is the JSON-serialized Rule (discriminated-union variant),
+# `ParsedRules.rule_json` is the JSON-serialized Rule (discriminated-union variant),
 # or `None` if the LLM could not compile the intent into a valid rule. The
 # orchestrator validates the JSON against `kentro.types.Rule` and routes failures
 # into `NLResponse.notes` rather than discarding them.
@@ -182,7 +182,9 @@ class NLIntentItem(BaseModel):
 
     kind: str = Field(
         description=(
-            "One of: field_read, entity_visibility, write_permission, conflict_resolver."
+            "One of: field_read, entity_visibility, write_permission. "
+            "Resolver intents (conflict resolution) live in a separate flow — "
+            "if the user described one, drop it and describe the omission in `notes`."
         ),
     )
     description: str = Field(description="The atomic intent in plain English.")
@@ -205,20 +207,27 @@ class NLIntentList(BaseModel):
     )
 
 
-class ParsedRule(BaseModel):
-    """Output of compiling a single NL intent into a Rule.
+class ParsedRules(BaseModel):
+    """Output of compiling a single NL intent into ZERO OR MORE Rules.
 
-    `rule_json` is the JSON serialization of one `kentro.types.Rule` variant, or
-    `None` when the intent could not be compiled. `reason` is always populated:
-    on success it explains the choice; on failure it explains why the intent
-    was skipped.
+    With wildcards retired (PR 35), an "all fields" intent like
+    "Allow A read all fields in C" must expand to one Rule per field on the
+    entity. The compiler emits a list:
+
+      - `rule_jsons=()` — intent was unfulfillable; `reason` explains why.
+      - `rule_jsons=("...",)` — single per-field rule (the common case).
+      - `rule_jsons=("...", "...", ...)` — fan-out for "all fields"-style intents.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    rule_json: str | None = Field(
-        default=None,
-        description="JSON for a single Rule variant, or null when not compilable.",
+    rule_jsons: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "JSON for one or more Rule variants. Empty when the intent could not "
+            "be compiled. For 'all fields'-style intents, emit one entry per "
+            "field listed in the registered schema for the target entity type."
+        ),
     )
     reason: str = Field(description="Always present — explanation or skip-reason.")
 
@@ -265,7 +274,7 @@ class LLMClient(ABC):
         registered_schemas: "list",  # list[EntityTypeDef]
         known_agent_ids: tuple[str, ...],
         model: str | None = None,
-    ) -> ParsedRule: ...
+    ) -> ParsedRules: ...
 
 
 class DefaultLLMClient(LLMClient):
@@ -340,7 +349,7 @@ class DefaultLLMClient(LLMClient):
         registered_schemas: list,
         known_agent_ids: tuple[str, ...],
         model: str | None = None,
-    ) -> ParsedRule:
+    ) -> ParsedRules:
         agents_block = ", ".join(known_agent_ids) if known_agent_ids else "(none)"
         user = (
             f"INTENT KIND: {intent_kind}\n"
@@ -352,7 +361,7 @@ class DefaultLLMClient(LLMClient):
             model=model or self.fast_model,
             system=load_skill_markdown("nl_to_rule"),
             user=user,
-            response_model=ParsedRule,
+            response_model=ParsedRules,
         )
 
 
@@ -392,7 +401,7 @@ class OfflineLLMClient(LLMClient):
 
     def parse_nl_rule(
         self, *, intent_description, intent_kind, registered_schemas, known_agent_ids, model=None
-    ) -> ParsedRule:
+    ) -> ParsedRules:
         raise LLMOfflineError(
             "OfflineLLMClient.parse_nl_rule called — NL parsing requires a real LLM backend"
         )
@@ -458,7 +467,7 @@ __all__ = [
     "NLIntentList",
     "NotifyAction",
     "OfflineLLMClient",
-    "ParsedRule",
+    "ParsedRules",
     "SkillAction",
     "SkillResolverDecision",
     "WriteEntityAction",

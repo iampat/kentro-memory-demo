@@ -125,15 +125,43 @@ class RuleVersionRow(SQLModel, table=True):
     summary: str | None = None
 
 
-class RuleRow(SQLModel, table=True):
-    """One rule belonging to one rule version. Stored as JSON of a `Rule` discriminated-union variant."""
+class EntityTypeRulesRow(SQLModel, table=True):
+    """ALL ACL rules for one entity_type at one rule version, stored as a JSON
+    array. Replaces the per-rule `RuleRow` (see PR 35) — one row per (version,
+    entity_type) keeps editing atomic and matches the type-scoped UI.
 
-    __tablename__ = "rule_record"
+    `rules_json` is a JSON array of Rule variants (`{"type": "field_read", ...}`,
+    `{"type": "entity_visibility", ...}`, `{"type": "write", ...}`). Resolvers
+    are stored in `EntityTypeResolversRow` instead — they answer a different
+    question and live separately.
+    """
+
+    __tablename__ = "entity_type_rules"
+    __table_args__ = (
+        UniqueConstraint("rule_version", "entity_type", name="uq_entity_type_rules"),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     rule_version: int = Field(foreign_key="rule_version.version", index=True)
-    rule_type: str = Field(index=True)
-    payload_json: str
+    entity_type: str = Field(index=True)
+    rules_json: str
+
+
+class EntityTypeResolversRow(SQLModel, table=True):
+    """ALL conflict-resolver policies for one entity_type at one rule version,
+    stored as a JSON array of `ResolverPolicy` records. Sibling table to
+    `EntityTypeRulesRow`; both are versioned together.
+    """
+
+    __tablename__ = "entity_type_resolvers"
+    __table_args__ = (
+        UniqueConstraint("rule_version", "entity_type", name="uq_entity_type_resolvers"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    rule_version: int = Field(foreign_key="rule_version.version", index=True)
+    entity_type: str = Field(index=True)
+    resolvers_json: str
 
 
 class SchemaTypeRow(SQLModel, table=True):
@@ -209,9 +237,10 @@ __all__ = [
     "ConflictRow",
     "DocumentRow",
     "EntityRow",
+    "EntityTypeResolversRow",
+    "EntityTypeRulesRow",
     "ExtractionStepRow",
     "FieldWriteRow",
-    "RuleRow",
     "RuleVersionRow",
     "SchemaTypeRow",
     "SkillActionExecutionRow",

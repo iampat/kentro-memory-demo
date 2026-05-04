@@ -100,7 +100,36 @@ def test_smoke_test_command_succeeds(patched_httpx: TestClient) -> None:
                     EntityVisibilityRule(
                         agent_id="ingestion_agent", entity_type="Customer", allowed=True
                     ),
-                    WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="name",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="contact",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="sales_notes",
+                        allowed=True,
+                    ),
+                    WriteRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="support_tickets",
+                        allowed=True,
+                    ),
                     FieldReadRule(
                         agent_id="ingestion_agent",
                         entity_type="Customer",

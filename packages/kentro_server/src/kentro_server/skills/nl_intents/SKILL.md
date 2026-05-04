@@ -6,20 +6,23 @@ changes in a single message.
 
 Your job: split the message into a list of **atomic intents**, where each intent
 describes ONE rule change — one field-read permission, one entity-visibility
-toggle, one write permission, one conflict-resolution policy, etc.
+toggle, or one write permission. Conflict-resolution policies are NOT rules in
+this system — they live separately and are configured through a different flow
+(the lineage drawer in the UI), so do NOT emit intents for them.
 
 Output structure:
 
 - `intents`: a list of atomic intents. Each intent has:
-  - `kind`: one of `"field_read" | "entity_visibility" | "write_permission" | "conflict_resolver"` —
+  - `kind`: one of `"field_read" | "entity_visibility" | "write_permission"` —
     the dimension this intent affects.
   - `description`: a short natural-language sentence describing this single intent.
     Quote the user's original phrasing where useful.
 - `notes`: optional free-text. Use this when part of the user's message could not
-  be classified into one of the four kinds — name the dropped fragment and explain
-  briefly. The orchestrator surfaces `notes` to the caller so the user sees *why*
-  their phrasing was not turned into a rule. Leave `notes` null when every part
-  of the message was classified successfully.
+  be classified into one of the three kinds, OR was about resolver policies (which
+  live elsewhere). Name the dropped fragment and explain briefly. The orchestrator
+  surfaces `notes` to the caller so the user sees *why* their phrasing was not
+  turned into a rule. Leave `notes` null when every part of the message was
+  classified successfully.
 
 Hard rules:
 
@@ -29,5 +32,6 @@ Hard rules:
 - If the user's message is empty or only contains pleasantries, return
   `intents=[]` (and leave `notes` null — pleasantries are not unclassifiable
   rule changes, just absent ones).
-- If you cannot classify a fragment into one of the four kinds, omit it from
-  `intents` AND describe what was dropped in `notes`.
+- If you cannot classify a fragment into one of the three kinds (or it's about
+  conflict resolution), omit it from `intents` AND describe what was dropped
+  in `notes`.
