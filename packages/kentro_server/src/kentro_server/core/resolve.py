@@ -19,6 +19,7 @@ SkillResolverDecision in skills/llm_client.py for the schema. Lands the
 
 import logging
 from dataclasses import dataclass
+from uuid import UUID
 
 from kentro.types import (
     AutoResolverSpec,
@@ -70,12 +71,23 @@ def resolve(
     entity_type: str,
     field_name: str,
     llm: LLMClient,
+    tie_break_seq_by_write_id: dict[UUID, int | None] | None = None,
 ) -> ResolvedFieldValue:
-    """Pick a winner over `candidates` per `spec`. Empty candidates is the caller's bug."""
+    """Pick a winner over `candidates` per `spec`. Empty candidates is the caller's bug.
+
+    `tie_break_seq_by_write_id` maps each candidate's `id` to its owning event's
+    `activation_seq` (or None when the write predates the event system / is an
+    admin-direct write). LatestWrite-style policies sort by this sequence so
+    re-toggling an event makes its writes "newest" in resolver-tie-break terms.
+    Corroboration / single-candidate fast paths still use `written_at` since the
+    chosen lineage record is purely cosmetic when all values agree.
+    """
     if not candidates:
         raise ValueError(
             "resolve() called with zero candidates — caller should short-circuit on UNKNOWN"
         )
+
+    seq_map = tie_break_seq_by_write_id or {}
 
     # Single-candidate fast path: nothing to resolve.
     if len(candidates) == 1:
@@ -112,7 +124,7 @@ def resolve(
         )
 
     if isinstance(spec, LatestWriteResolverSpec):
-        winner = max(candidates, key=lambda c: c.written_at)
+        winner = max(candidates, key=lambda c: _tie_break_key(c, seq_map))
         return ResolvedFieldValue(
             status=FieldStatus.KNOWN,
             winner=winner,
@@ -131,7 +143,7 @@ def resolve(
                 reason=f"{_PREFER_AGENT_NO_MATCH} ({spec.agent_id!r})",
                 resolver_used=spec,
             )
-        winner = max(matches, key=lambda c: c.written_at)
+        winner = max(matches, key=lambda c: _tie_break_key(c, seq_map))
         return ResolvedFieldValue(
             status=FieldStatus.KNOWN,
             winner=winner,
@@ -180,6 +192,20 @@ def resolve(
 
     # Unreachable in practice — the discriminated union is closed.
     raise TypeError(f"unknown resolver spec: {type(spec).__name__}")
+
+
+def _tie_break_key(candidate: FieldWriteRow, seq_map: dict[UUID, int | None]) -> tuple:
+    """Total ordering for LatestWrite-style tie-breaks.
+
+    Primary key: presence-of-event (NULL event_id is "ambient"; ranks above any
+    catalog event so admin-direct writes always win against toggle history).
+    Secondary key: `activation_seq` (None for catalog events that haven't
+    activated yet — treated as 0). Tertiary: `written_at` to keep the order
+    deterministic when seqs collide.
+    """
+    seq = seq_map.get(candidate.id)
+    is_ambient = candidate.event_id is None
+    return (1 if is_ambient else 0, seq if seq is not None else 0, candidate.written_at)
 
 
 def _auto_dispatch(

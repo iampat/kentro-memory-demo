@@ -1,8 +1,8 @@
 /* global React, ReactDOM, K */
 // PR 14 — full prototype-match layout. Everything driven by live server data.
 //
-// Topbar:        brand · KENTRO · tenant chip · scene stepper (1–4) ·
-//                rule-version chip · conflict-policy chip
+// Topbar:        brand · KENTRO · tenant chip · rule-version chip ·
+//                conflict-policy chip
 // Main grid:     ┌────────────────┬────────────────┬────────────────┐
 //                │ Sales agent    │ CS agent       │ Policy editor  │
 //                ├────────────────┼────────────────┼────────────────┤
@@ -16,7 +16,7 @@
 // no canned data anywhere. The `data.js` and prototype `KENTRO_DATA` blob
 // are GONE — never imported.
 
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback } = React;
 
 // === Bootstrap silently — agent-switcher.jsx is retired (PR 14). =============
 //
@@ -562,21 +562,10 @@ function describeRule(r) {
   }
 }
 
-// === <SceneStepper> ========================================================
-// Four scripted demo scenes. Each fires real server operations sequentially.
-
-const SCENES = [
-  { n: 1, label: "01 · steady state" },
-  { n: 2, label: "02 · conflict drops" },
-  { n: 3, label: "03 · rule change" },
-  { n: 4, label: "04 · lineage" },
-];
-
 // === <App> =================================================================
 
 function App() {
-  const { ready, bootError, tenantId } = useBootstrap();
-  const [scene, setScene] = useState(1);
+  const { ready, bootError } = useBootstrap();
   const [salesQuery, setSalesQuery] = useState({ type: "Customer", key: "Acme Corp" });
   const [csQuery, setCsQuery] = useState({ type: "Customer", key: "Acme Corp" });
   const [drawerPayload, setDrawerPayload] = useState(null);
@@ -591,9 +580,7 @@ function App() {
   const [lastWriteResult, setLastWriteResult] = useState(null);
   const [seeding, setSeeding] = useState(false);
   const [seedError, setSeedError] = useState(null);
-  const [pendingDoc, setPendingDoc] = useState(false);
   const [schemaTypes, setSchemaTypes] = useState([]);
-  const sceneBusyRef = useRef(false);
 
   // Load documents + active ruleset whenever refresh bumps.
   useEffect(() => {
@@ -661,24 +648,6 @@ function App() {
     }
   };
 
-  const onIngestEmail = async () => {
-    setPendingDoc(true);
-    try {
-      await K.api.ingestDocument(
-        // Minimal email payload; the LLM extractor decides which entities to
-        // touch. The text is the same content the prototype's data.js used.
-        `Subject: Acme renewal — updated number\n\nFrom: jane.doe@acme.example\nDate: 2026-04-17 14:08\n\nHi team,\n\nFollowing my call with finance, the renewal will be $300K — we got the additional uplift signed off. Please update the deal record.\n\nThanks,\nJane`,
-        "email_jane_2026-04-17.md",
-        "email"
-      );
-      bumpRefresh();
-    } catch (err) {
-      alert(`ingest failed: ${err.message}`);
-    } finally {
-      setPendingDoc(false);
-    }
-  };
-
   const onAttemptWrite = async (agentId, type, key, field, value) => {
     try {
       // Use the agent's own bearer (NOT admin) — the whole point of the
@@ -724,64 +693,6 @@ function App() {
     setDrawerOpen(true);
   };
 
-  // Scene controller — fires real server ops. Guards against double-clicks
-  // via sceneBusyRef.
-  const goToScene = async (n) => {
-    if (sceneBusyRef.current) return;
-    sceneBusyRef.current = true;
-    setScene(n);
-    try {
-      switch (n) {
-        case 1:
-          // Reset = ensure baseline data exists. If the tenant is empty, seed.
-          if (isEmpty) await K.api.seedDemo();
-          break;
-        case 2: {
-          // Drop the email if not present.
-          const docs = await K.api.listDocuments();
-          if (!docs.find((d) => d.label === "email_jane_2026-04-17.md")) {
-            await onIngestEmail();
-          }
-          break;
-        }
-        case 3: {
-          // Apply the "written outweighs verbal" rule via NL parse → apply.
-          const parsed = await K.api.parseNL(
-            "On Customer.deal_size, written sources outweigh verbal."
-          );
-          if (parsed?.parsed_ruleset?.rules?.length) {
-            const current = await K.api.getRules();
-            await K.api.applyRules(
-              {
-                version: 0,
-                rules: [...(current.rules || []), ...parsed.parsed_ruleset.rules],
-              },
-              "scene 3: written outweighs verbal"
-            );
-          }
-          break;
-        }
-        case 4:
-          // Open lineage drawer on Customer/Acme Corp/deal_size as Sales.
-          setDrawerPayload({
-            agent_id: "sales",
-            entity_type: "Customer",
-            entity_key: "Acme Corp",
-            field_name: "deal_size",
-          });
-          setDrawerOpen(true);
-          break;
-        default:
-          break;
-      }
-      bumpRefresh();
-    } catch (err) {
-      console.warn("scene step failed", err);
-    } finally {
-      sceneBusyRef.current = false;
-    }
-  };
-
   if (bootError) {
     return (
       <div className="app">
@@ -807,7 +718,6 @@ function App() {
           <span className="brand">
             <span className="brand-mark"></span>KENTRO
           </span>
-          <span className="tenant-chip">{tenantId || "?"}</span>
           <span className="spacer" />
         </div>
         <div className="seed-overlay">
@@ -838,18 +748,6 @@ function App() {
         <span className="brand">
           <span className="brand-mark"></span>KENTRO
         </span>
-        <span className="tenant-chip">{tenantId || "—"}</span>
-        <div className="scene-stepper">
-          {SCENES.map((s) => (
-            <button
-              key={s.n}
-              className={K.cls(scene === s.n && "active")}
-              onClick={() => goToScene(s.n)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
         <span className="spacer" />
         <span
           className="rule-chip"
@@ -891,13 +789,8 @@ function App() {
           documents={documents}
           activeDocId={activeDocId}
           onPickDoc={setActiveDocId}
-          onIngestEmail={onIngestEmail}
-          pendingDoc={pendingDoc}
         />
-        <K.GraphPanel
-          refresh={refresh}
-          highlightField={drawerPayload}
-        />
+        <K.EventRail refresh={refresh} onChange={bumpRefresh} />
         <K.AccessMatrixPanel
           entityType="Customer"
           refresh={refresh}

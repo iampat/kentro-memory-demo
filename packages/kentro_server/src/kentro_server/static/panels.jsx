@@ -18,8 +18,6 @@ window.K.ExtractionPanel = function ExtractionPanel({
   documents,
   activeDocId,
   onPickDoc,
-  onIngestEmail,
-  pendingDoc,
 }) {
   const [steps, setSteps] = useState([]);
   const [stepsLoading, setStepsLoading] = useState(false);
@@ -53,8 +51,6 @@ window.K.ExtractionPanel = function ExtractionPanel({
   }, [steps]);
 
   const activeDoc = documents.find((d) => d.id === activeDocId);
-  const emailLabel = "email_jane_2026-04-17.md";
-  const hasEmail = documents.some((d) => d.label === emailLabel);
 
   return (
     <div className="panel">
@@ -67,19 +63,10 @@ window.K.ExtractionPanel = function ExtractionPanel({
         </span>
       </div>
       <div className="panel-body">
-        <div className="add-doc">
-          <button onClick={onIngestEmail} disabled={pendingDoc || hasEmail}>
-            {pendingDoc
-              ? "ingesting…"
-              : hasEmail
-                ? "✓ Jane Doe email already ingested"
-                : "+ drop ✉️ email from Jane Doe"}
-          </button>
-        </div>
         <div className="doc-list">
           {documents.length === 0 && (
             <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 11 }}>
-              No documents in this tenant yet.
+              No active events. Activate one from the Catalog →
             </div>
           )}
           {documents.map((d) => {

@@ -20,7 +20,8 @@ from kentro.schema import entity_type_def_from
 from pydantic import BaseModel, ConfigDict
 
 from kentro_server.api.auth import AdminPrincipalDep
-from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep, TenantRegistryDep
+from kentro_server.api.deps import SchemaRegistryDep, SettingsDep, TenantRegistryDep
+from kentro_server.core.catalog import register_ingest_event
 from kentro_server.core.rules import apply_ruleset
 from kentro_server.demo import (
     AuditLog,
@@ -30,7 +31,6 @@ from kentro_server.demo import (
     infer_source_class,
     initial_demo_ruleset,
 )
-from kentro_server.extraction import ingest_document
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class DemoSeedResponse(BaseModel):
     schemas_registered: tuple[str, ...]
     rule_version: int
     rules_applied: int
-    documents_ingested: int
+    catalog_events_registered: int
 
 
 def _ensure_opted_in(settings) -> None:
@@ -109,17 +109,16 @@ def seed_demo(
     principal: AdminPrincipalDep,
     settings: SettingsDep,
     schema: SchemaRegistryDep,
-    llm: LLMClientDep,
 ) -> DemoSeedResponse:
-    """Register schemas + apply demo ruleset + ingest the corpus, all server-side.
+    """Register schemas + apply demo ruleset + register the corpus as catalog events.
 
-    Used by the UI's "Seed demo data" button on an empty tenant. Equivalent to
-    running the `kentro-server seed-demo` CLI but in-process — no second curl
-    loop, no duplicate Anthropic-key wiring.
+    Schemas and rules are base infra (always live, never toggleable). The corpus
+    is registered as `ingest_document` catalog entries with `active=False` — the
+    viewer activates each one from the UI to drop documents into the world. First
+    activation runs the LLM extraction; subsequent toggles are flag flips.
 
-    Idempotent: re-registering existing schemas is a no-op for unchanged defs;
-    re-ingesting the same blob produces a new document row but the field writes
-    are corroboration on top of the prior ones.
+    Idempotent: re-running registers any missing entities and is a no-op for
+    those already present.
     """
     _ensure_opted_in(settings)
 
@@ -143,7 +142,8 @@ def seed_demo(
         summary="initial demo ruleset (POST /demo/seed)",
     )
 
-    # 3. Ingest every markdown file in examples/synthetic_corpus/.
+    # 3. Register every corpus markdown as an inactive catalog event. No
+    # extraction runs here — the viewer activates events from the UI.
     # demo.py → routes → api → kentro_server → src → kentro_server → packages → repo
     # so parents[6] is the repo root.
     repo_root = Path(__file__).resolve().parents[6]
@@ -154,17 +154,16 @@ def seed_demo(
             detail=f"corpus dir not found: {corpus_dir}",
         )
     docs = sorted(corpus_dir.glob("*.md"))
-    for path in docs:
-        ingest_document(
-            store=principal.store,
-            llm=llm,
-            content=path.read_text(encoding="utf-8").encode("utf-8"),
+    for catalog_order, path in enumerate(docs, start=1):
+        register_ingest_event(
+            principal.store,
+            catalog_key=f"corpus:{path.name}",
+            title=path.name,
+            description=_describe_corpus_file(path.name),
+            content=path.read_text(encoding="utf-8"),
             label=path.name,
-            registered_schemas=schema.list_all(),
-            written_by_agent_id=principal.agent_id,
-            rule_version=rule_version,
-            smart_model=settings.kentro_llm_smart_model,
             source_class=infer_source_class(path.name),
+            catalog_order=catalog_order,
         )
 
     return DemoSeedResponse(
@@ -172,5 +171,21 @@ def seed_demo(
         schemas_registered=tuple(registered),
         rule_version=rule_version,
         rules_applied=len(ruleset.rules),
-        documents_ingested=len(docs),
+        catalog_events_registered=len(docs),
     )
+
+
+def _describe_corpus_file(filename: str) -> str | None:
+    """Best-effort one-line description for the catalog UI.
+
+    Hand-authored hints for the canonical corpus filenames; falls back to the
+    inferred source class when the filename is unfamiliar.
+    """
+    descriptions = {
+        "acme_call_2026-04-15.md": "Sales call transcript with Acme — initial $250K renewal.",
+        "email_jane_2026-04-17.md": "Follow-up email from Jane after talking to finance — $300K.",
+        "acme_ticket_142.md": "Customer support ticket against Acme.",
+        "internal_slack_thread_2026-04-19.md": "Internal Slack thread about Acme renewal.",
+        "ali_meeting_note_2026-03-10.md": "Meeting note from a 1:1 with the prospect.",
+    }
+    return descriptions.get(filename)

@@ -42,12 +42,10 @@ class DocumentRow(SQLModel, table=True):
     `"written"`, `"system"`. Optional and nullable for backward compatibility
     with documents ingested before this column existed.
 
-    Note: adding this column to an EXISTING tenant DB requires either deleting
-    `kentro_state/<tenant>/state.sqlite` (clean re-seed) or running a manual
-    `ALTER TABLE document ADD COLUMN source_class VARCHAR;` — the lifespan's
-    `SQLModel.metadata.create_all()` only creates missing tables, never alters
-    existing ones. For dev-local upgrades, deleting state and re-seeding is
-    fine; for any deployed instance, run the ALTER beforehand.
+    `event_id` ties this document to a catalog `EventRow`. NULL = "always-live"
+    (e.g. an admin-direct ingest that bypasses the catalog). When set, the
+    document and everything derived from it is filtered out of reads when the
+    owning event is inactive — see `kentro_server.core.read`.
     """
 
     __tablename__ = "document"
@@ -58,6 +56,7 @@ class DocumentRow(SQLModel, table=True):
     label: str | None = None
     source_class: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now_utc)
+    event_id: UUID | None = Field(default=None, foreign_key="event.id", index=True)
 
 
 class EntityRow(SQLModel, table=True):
@@ -94,6 +93,7 @@ class FieldWriteRow(SQLModel, table=True):
     rule_version_at_write: int
     extraction_step_id: UUID | None = Field(default=None, foreign_key="extraction_step.id")
     superseded: bool = Field(default=False, index=True)
+    event_id: UUID | None = Field(default=None, foreign_key="event.id", index=True)
 
 
 class ConflictRow(SQLModel, table=True):
@@ -113,6 +113,7 @@ class ConflictRow(SQLModel, table=True):
     resolved_at: datetime | None = None
     resolution_winner_write_id: UUID | None = Field(default=None, foreign_key="field_write.id")
     resolver_used: str | None = None  # discriminator from ResolverSpec.type
+    event_id: UUID | None = Field(default=None, foreign_key="event.id", index=True)
 
 
 class RuleVersionRow(SQLModel, table=True):
@@ -202,6 +203,45 @@ class ExtractionStepRow(SQLModel, table=True):
     tokens_out: int
     latency_ms: int
     created_at: datetime = Field(default_factory=_now_utc)
+    event_id: UUID | None = Field(default=None, foreign_key="event.id", index=True)
+
+
+class EventRow(SQLModel, table=True):
+    """A toggleable demo event (currently: ingestion only).
+
+    The catalog model: an event represents a discrete world-changing action
+    the demo viewer can toggle on or off. Today the only kind is
+    `ingest_document` — payload carries the doc text + label so first
+    activation can run extraction lazily and re-activation is a flag flip
+    against the rows already created.
+
+    Ordering:
+      - `catalog_order` is the demo author's intended position in the catalog
+        UI. Stable across the lifetime of the row.
+      - `activation_seq` is bumped on every activation (each toggle-on assigns
+        `MAX(activation_seq) + 1`). NULL means never activated. Drives both
+        the event-list display order AND the resolver's tie-break for
+        LatestWrite-style policies — re-activating a previously-active event
+        moves it to the top of the stack and can flip conflict outcomes.
+
+    Why payload is JSON: keeps the catalog generic. A future `apply_rule`
+    or `delete_document` event kind would store its own shape in the same
+    column rather than growing per-kind tables.
+    """
+
+    __tablename__ = "event"
+    __table_args__ = (UniqueConstraint("catalog_key", name="uq_event_catalog_key"),)
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    catalog_key: str = Field(index=True)
+    title: str
+    description: str | None = None
+    kind: str  # "ingest_document" — discriminator for payload shape
+    payload_json: str  # JSON-serialized payload; shape depends on `kind`
+    catalog_order: int = Field(index=True)
+    activation_seq: int | None = Field(default=None, index=True)
+    active: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=_now_utc)
 
 
 __all__ = [
@@ -209,6 +249,7 @@ __all__ = [
     "ConflictRow",
     "DocumentRow",
     "EntityRow",
+    "EventRow",
     "ExtractionStepRow",
     "FieldWriteRow",
     "RuleRow",

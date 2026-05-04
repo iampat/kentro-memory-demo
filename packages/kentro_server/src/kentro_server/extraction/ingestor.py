@@ -20,7 +20,7 @@ import hashlib
 import json
 import logging
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from kentro.types import (
     EntityRecord,
@@ -58,6 +58,7 @@ def ingest_document(
     rule_version: int,
     smart_model: str,
     source_class: str | None = None,
+    event_id: UUID | None = None,
 ) -> IngestionResult:
     """Ingest one document end-to-end. Returns the SDK-shaped `IngestionResult`.
 
@@ -121,6 +122,7 @@ def ingest_document(
                     content_hash=content_hash,
                     label=label,
                     source_class=source_class,
+                    event_id=event_id,
                 )
             )
             session.add(
@@ -133,6 +135,7 @@ def ingest_document(
                     tokens_in=extraction_step_dto.tokens_in,
                     tokens_out=extraction_step_dto.tokens_out,
                     latency_ms=extraction_step_dto.latency_ms,
+                    event_id=event_id,
                 )
             )
             session.flush()
@@ -170,6 +173,7 @@ def ingest_document(
                         rule_version_at_write=rule_version,
                         source_document_id=doc_id,
                         extraction_step_id=extraction_step_id,
+                        event_id=event_id,
                     )
                     lineage = LineageRecord(
                         source_document_id=doc_id,
