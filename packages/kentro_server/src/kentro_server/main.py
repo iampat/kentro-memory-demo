@@ -32,7 +32,14 @@ from kentro_server.api import (
     viz_router,
 )
 from kentro_server.core.events import EventBus
-from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
+from kentro_server.demo import (
+    AuditLog,
+    Customer,
+    Deal,
+    Person,
+    infer_source_class,
+    initial_demo_ruleset,
+)
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
 from kentro_server.settings import Settings
 from kentro_server.skills.factory import cache_metadata, cache_stats, make_llm_client
@@ -387,7 +394,11 @@ def seed_demo(
         console.print(f"[yellow]no .md files in {corpus_dir}[/yellow]")
         return
     for path in docs:
-        body = {"content": path.read_text(encoding="utf-8"), "label": path.name}
+        body = {
+            "content": path.read_text(encoding="utf-8"),
+            "label": path.name,
+            "source_class": infer_source_class(path.name),
+        }
         r = httpx.post(f"{base}/documents", headers=headers, json=body, timeout=120.0)
         if r.status_code != 200:
             console.print(f"[red]ingest {path.name} failed[/red] {r.status_code}: {r.text}")

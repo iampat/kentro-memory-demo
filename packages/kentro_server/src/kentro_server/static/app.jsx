@@ -390,24 +390,56 @@ function PolicyEditor({ refresh, onApplied }) {
               </p>
             )}
             {!loading &&
-              rendered.rules.map((r, i) => {
-                const kind = policyKindOf(parseRuleSummary(r.summary));
-                const isExpanded = expanded[i];
-                return (
-                  <div
-                    key={i}
-                    className={K.cls("policy-row", `kind-${kind}`)}
-                    onClick={() => setExpanded({ ...expanded, [i]: !isExpanded })}
-                  >
-                    <div className="policy-row-main">
-                      <span className={K.cls("policy-kind", `kind-${kind}`)}>{kind}</span>
-                      <span className="policy-summary">{r.summary}</span>
-                      <span className="policy-toggle">{isExpanded ? "▾" : "▸"}</span>
+              (() => {
+                // Group rules by their Rego package so the redundant
+                // `package kentro.access` / `package kentro.resolve` header
+                // appears once per group instead of repeated per rule.
+                const groups = new Map();
+                rendered.rules.forEach((r, i) => {
+                  const pkg = r.package || "kentro.access";
+                  if (!groups.has(pkg)) groups.set(pkg, []);
+                  groups.get(pkg).push({ rule: r, idx: i });
+                });
+                return Array.from(groups.entries()).map(([pkg, items]) => (
+                  <div key={pkg} className="policy-package-group">
+                    <div className="policy-package-header">
+                      <span className="policy-package-tag">package</span>
+                      <span className="policy-package-name">{pkg}</span>
+                      <span className="policy-package-count">
+                        {items.length} {items.length === 1 ? "rule" : "rules"}
+                      </span>
                     </div>
-                    {isExpanded && <pre className="policy-rego">{r.rego}</pre>}
+                    {items.map(({ rule: r, idx: i }) => {
+                      const kind = policyKindOf(parseRuleSummary(r.summary));
+                      const isExpanded = expanded[i];
+                      return (
+                        <div
+                          key={i}
+                          className={K.cls("policy-row", `kind-${kind}`)}
+                          onClick={() =>
+                            setExpanded({ ...expanded, [i]: !isExpanded })
+                          }
+                        >
+                          <div className="policy-row-main">
+                            <span className={K.cls("policy-kind", `kind-${kind}`)}>
+                              {kind}
+                            </span>
+                            <span className="policy-summary">{r.summary}</span>
+                            <span className="policy-toggle">
+                              {isExpanded ? "▾" : "▸"}
+                            </span>
+                          </div>
+                          {isExpanded && (
+                            <pre className="policy-rego">
+                              {r.rego_body || r.rego}
+                            </pre>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                ));
+              })()}
           </div>
 
           <div className="suggestion-row">

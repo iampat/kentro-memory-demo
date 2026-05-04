@@ -315,4 +315,40 @@ def render_rule_as_rego(rule: Rule) -> str:
             raise TypeError(f"render_rule_as_rego: unknown rule type {type(rule).__name__}")
 
 
-__all__ = ["RuleSetDiff", "render_rule", "render_rule_as_rego", "ruleset_diff"]
+def render_rule_as_rego_body(rule: Rule) -> str:
+    """Same as `render_rule_as_rego` but with the leading `package ...` preamble
+    stripped. Useful for the policy editor's structured view, which lists many
+    rules under one package: emit the package header once at the section level
+    instead of repeating it per rule.
+
+    Returns the rule body verbatim (everything after the first blank line of
+    the full snippet). Falls back to the full snippet if the per-variant
+    template happens not to begin with a `package` line — keeps callers safe
+    if a future variant skips it.
+    """
+    full = render_rule_as_rego(rule)
+    if not full.startswith("package "):
+        return full
+    # The per-variant templates are `package kentro.X\n\n<body>`; split off the
+    # preamble at the first blank line.
+    parts = full.split("\n\n", 1)
+    if len(parts) < 2:
+        return full
+    return parts[1]
+
+
+def rule_package_for(rule: Rule) -> str:
+    """Return the Rego package the rule belongs to. Mirrors `render_rule_as_rego`'s
+    per-variant choice (currently `kentro.access` for access rules and
+    `kentro.resolve` for ConflictRule)."""
+    return "kentro.resolve" if isinstance(rule, ConflictRule) else "kentro.access"
+
+
+__all__ = [
+    "RuleSetDiff",
+    "render_rule",
+    "render_rule_as_rego",
+    "render_rule_as_rego_body",
+    "rule_package_for",
+    "ruleset_diff",
+]

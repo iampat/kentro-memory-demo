@@ -9,7 +9,12 @@ caller can decide whether to apply automatically or surface a clarification.
 import logging
 
 from fastapi import APIRouter
-from kentro.rules import render_rule, render_rule_as_rego
+from kentro.rules import (
+    render_rule,
+    render_rule_as_rego,
+    render_rule_as_rego_body,
+    rule_package_for,
+)
 from kentro.types import NLResponse, RuleSet
 from pydantic import BaseModel, ConfigDict
 
@@ -70,11 +75,20 @@ def get_active(principal: PrincipalDep) -> RuleSet:
 
 
 class RenderedRule(BaseModel):
-    """One rule rendered both human-readable and as a Rego-flavored snippet."""
+    """One rule rendered three ways: a one-line human summary, the full Rego
+    snippet (standalone — includes the `package ...` preamble), and the body
+    only (no `package` line) so the UI can group rules by package and emit one
+    header per group instead of repeating it per rule.
+
+    `package` is the Rego package name (`kentro.access` for FieldRead/Write/
+    EntityVisibility, `kentro.resolve` for ConflictRule). UI groups by it.
+    """
 
     model_config = ConfigDict(frozen=True)
     summary: str
     rego: str
+    rego_body: str
+    package: str
 
 
 class RenderedRulesetResponse(BaseModel):
@@ -101,6 +115,12 @@ def get_active_rendered(principal: PrincipalDep) -> RenderedRulesetResponse:
     """
     ruleset = load_active_ruleset(principal.store)
     rendered = tuple(
-        RenderedRule(summary=render_rule(r), rego=render_rule_as_rego(r)) for r in ruleset.rules
+        RenderedRule(
+            summary=render_rule(r),
+            rego=render_rule_as_rego(r),
+            rego_body=render_rule_as_rego_body(r),
+            package=rule_package_for(r),
+        )
+        for r in ruleset.rules
     )
     return RenderedRulesetResponse(version=ruleset.version, rules=rendered)
