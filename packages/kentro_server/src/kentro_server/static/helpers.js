@@ -55,7 +55,12 @@ K.fmtFieldValue = function (fval) {
       return cands.join(" ⇄ ") || "(unresolved)";
     }
     case "known":
-      return typeof fval.value === "string" ? fval.value : JSON.stringify(fval.value);
+      // String values that look like markdown filenames (e.g. the Note
+      // entity's `source_label` set to "acme_ticket_162.md") read more
+      // naturally without the `.md` suffix. K.docLabel strips trailing
+      // `.md` and is a no-op for everything else.
+      if (typeof fval.value === "string") return K.docLabel(fval.value);
+      return JSON.stringify(fval.value);
     default:
       return JSON.stringify(fval.value ?? "—");
   }

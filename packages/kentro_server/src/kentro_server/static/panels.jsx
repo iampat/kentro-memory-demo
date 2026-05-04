@@ -467,10 +467,12 @@ window.K.WorkPanel = function WorkPanel({
   );
 };
 
-// ── Access Matrix Panel ─────────────────────────────────────────────────────
-// Reads `GET /viz/access-matrix?entity_type=Customer` and renders the
-// agents × fields permission grid.
-window.K.AccessMatrixPanel = function AccessMatrixPanel({ entityType, refresh, changedKeys }) {
+// ── Access Matrix Table ─────────────────────────────────────────────────────
+// Bare table — no panel chrome. Used both as a standalone Access Matrix
+// panel (in the legacy bottom-right grid slot) and inline inside the new
+// PolicyOverlay's "rules + matrix" composite view. Reads
+// `GET /viz/access-matrix?entity_type=...` for whatever type is passed in.
+window.K.AccessMatrixTable = function AccessMatrixTable({ entityType, refresh, changedKeys }) {
   const [matrix, setMatrix] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -498,65 +500,65 @@ window.K.AccessMatrixPanel = function AccessMatrixPanel({ entityType, refresh, c
     return matrix.cells.find((c) => c.agent_id === agent && c.field_name === field);
   };
 
+  if (loading) return <p style={{ color: "var(--ink-3)", fontSize: 11 }}>loading…</p>;
+  if (!matrix) {
+    return (
+      <p style={{ color: "var(--ink-3)", fontSize: 11 }}>
+        No matrix data — register the {entityType} schema first.
+      </p>
+    );
+  }
+  // Admin agents bypass ACL on reads (server-side `bypass_acl=is_admin`),
+  // so the rule-derived matrix is misleading for them — every cell would
+  // render as "invisible" because no FieldReadRule mentions the admin
+  // agent. Filter admins out so the matrix only shows enforced permissions.
+  const adminIds = new Set(
+    K.api.getAgentList().filter((a) => a.is_admin).map((a) => a.agent_id)
+  );
+  const visibleAgents = matrix.agents.filter((a) => !adminIds.has(a));
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <span className="panel-title">Access matrix</span>
-        <span className="panel-sub">{entityType} · per-agent permissions</span>
-      </div>
-      <div className="panel-body">
-        {loading && <p style={{ color: "var(--ink-3)", fontSize: 11 }}>loading…</p>}
-        {!loading && !matrix && (
-          <p style={{ color: "var(--ink-3)", fontSize: 11 }}>
-            No matrix data — register the {entityType} schema first.
-          </p>
-        )}
-        {!loading && matrix && (
-          <table className="matrix">
-            <thead>
-              <tr>
-                <th></th>
-                {matrix.fields.map((f) => (
-                  <th key={f}>{f}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {matrix.agents.map((agent) => (
-                <tr key={agent}>
-                  <td className="row-head">{agent}</td>
-                  {matrix.fields.map((f) => {
-                    const c = cellFor(agent, f);
-                    if (!c) return <td key={f} className="cell">—</td>;
-                    if (!c.visible) {
-                      return (
-                        <td key={f} className="invisible">
-                          invisible
-                        </td>
-                      );
-                    }
-                    const k = `${agent}:${f}`;
-                    const isChanged = changedKeys?.includes(k);
-                    return (
-                      <td key={f} className={K.cls("cell", isChanged && "changed")}>
-                        <div className="perm-line">
-                          <span className="perm-tag r">R</span>
-                          <span>{c.read ? "✓" : "—"}</span>
-                        </div>
-                        <div className="perm-line">
-                          <span className="perm-tag w">W</span>
-                          <span>{c.write ? "✓" : "—"}</span>
-                        </div>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
+    <table className="matrix">
+      <thead>
+        <tr>
+          <th></th>
+          {matrix.fields.map((f) => (
+            <th key={f}>{f}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {visibleAgents.map((agent) => (
+          <tr key={agent}>
+            <td className="row-head">{agent}</td>
+            {matrix.fields.map((f) => {
+              const c = cellFor(agent, f);
+              if (!c) return <td key={f} className="cell">—</td>;
+              if (!c.visible) {
+                return (
+                  <td key={f} className="invisible">
+                    invisible
+                  </td>
+                );
+              }
+              const k = `${agent}:${f}`;
+              const isChanged = changedKeys?.includes(k);
+              return (
+                <td key={f} className={K.cls("cell", isChanged && "changed")}>
+                  <div className="perm-line">
+                    <span className="perm-tag r">R</span>
+                    <span>{c.read ? "✓" : "—"}</span>
+                  </div>
+                  <div className="perm-line">
+                    <span className="perm-tag w">W</span>
+                    <span>{c.write ? "✓" : "—"}</span>
+                  </div>
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 };
 
@@ -803,6 +805,25 @@ function DocumentBody({ doc }) {
   }
 }
 
+// ── Empty Right Rail ────────────────────────────────────────────────────────
+// Placeholder rendered into the always-reserved right rail when no source
+// or entity is selected. Keeps the graph layout stable — clicking around
+// updates the rail in place without reflowing the canvas.
+window.K.EmptyRightRail = function EmptyRightRail() {
+  return (
+    <aside className="source-overlay" role="complementary" aria-label="Selection details">
+      <div className="source-overlay-head">
+        <span className="title">no selection</span>
+      </div>
+      <div className="source-overlay-empty">
+        Click an entity or source in the reasoning graph
+        <br />
+        to view its details here.
+      </div>
+    </aside>
+  );
+};
+
 // ── Source Overlay ──────────────────────────────────────────────────────────
 // Global right-edge slide-over that covers everything except the topbar (the
 // graph, the agent panels, the policy editor, the access matrix). Opens when
@@ -991,7 +1012,7 @@ function EntityViewCard({ agent, type, key_, refresh, onFieldClick }) {
   );
 }
 
-window.K.EntityOverlay = function EntityOverlay({ open, payload, onClose, refresh, onFieldClick }) {
+window.K.EntityOverlay = function EntityOverlay({ open, payload, onClose, refresh, onFieldClick, onOpenPolicy }) {
   // Close on Escape (mirrors SourceOverlay).
   useEffect(() => {
     if (!open) return;
@@ -1042,7 +1063,18 @@ window.K.EntityOverlay = function EntityOverlay({ open, payload, onClose, refres
             <span className="entity-type-chip">{payload.entity_type}</span>
             <span className="entity-key-text">{payload.entity_key}</span>
           </span>
-          <button onClick={onClose} aria-label="Close">esc</button>
+          <span className="entity-overlay-actions">
+            {typeof onOpenPolicy === "function" && (
+              <button
+                className="entity-overlay-acl-chip"
+                onClick={() => onOpenPolicy(payload.entity_type)}
+                title={`view & edit ACL rules for ${payload.entity_type}`}
+              >
+                ACL
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close">esc</button>
+          </span>
         </div>
         <div className="source-overlay-body entity-overlay-body">
           {ordered.map((agent) => (
@@ -1060,6 +1092,314 @@ window.K.EntityOverlay = function EntityOverlay({ open, payload, onClose, refres
     </React.Fragment>
   );
 };
+
+// ── Policy Overlay ──────────────────────────────────────────────────────────
+// Type-scoped view of "everything ACL" for one entity_type:
+//
+//   1. Access matrix (the agents × fields R/W grid, scoped to this type)
+//   2. Rules list (FieldReadRule / EntityVisibilityRule / WriteRule /
+//      ConflictRule whose entity_type matches), grouped by Rego package
+//   3. NL editor (chat → parse → apply, same as the legacy PolicyEditor),
+//      pre-prompted with suggestions relevant to the active type
+//
+// Lives in the LEFT-of-overlay slot (the same slot the LineageDrawer uses);
+// opening one closes the other. Stacks left of EntityOverlay so the entity's
+// identity stays visible while the user inspects/edits its rules.
+const POLICY_SUGGESTIONS_BY_TYPE = {
+  Customer: [
+    { label: "Hide deal_size from CS", text: "Hide deal_size from Customer Service." },
+    { label: "Prefer written over verbal", text: "On Customer.deal_size, written sources outweigh verbal." },
+    { label: "CS reads support_tickets only", text: "Customer Service can read support_tickets but not edit them." },
+  ],
+  AuditLog: [
+    { label: "Hide AuditLog from Sales", text: "Sales cannot see AuditLog." },
+  ],
+  Deal: [
+    { label: "Sales can read Deal.size", text: "Sales can read Deal.size and Deal.stage." },
+  ],
+};
+
+window.K.PolicyOverlay = function PolicyOverlay({ open, entityType, onClose, shifted, refresh, onApplied }) {
+  const [rendered, setRendered] = useState({ version: 0, rules: [] });
+  const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [parsing, setParsing] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [expanded, setExpanded] = useState({});
+  const [error, setError] = useState(null);
+  const [schemaTypes, setSchemaTypes] = useState([]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await K.api.getRulesRendered();
+      setRendered(r);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    reload();
+    K.api.listSchema().then((types) => setSchemaTypes(types || [])).catch(() => setSchemaTypes([]));
+  }, [open, reload, refresh]);
+
+  // ESC closes the overlay first (capture-phase + stopImmediatePropagation),
+  // mirroring LineageDrawer's behavior so it doesn't fall through to
+  // EntityOverlay's bubble listener.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  const onParse = async () => {
+    if (!draft.trim()) return;
+    setParsing(true);
+    setError(null);
+    try {
+      const r = await K.api.parseNL(draft);
+      setParsed(r);
+    } catch (err) {
+      setError(err.message);
+      setParsed(null);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const onApply = async () => {
+    if (!parsed?.parsed_ruleset) return;
+    setApplying(true);
+    setError(null);
+    try {
+      const current = await K.api.getRules();
+      const merged = {
+        version: 0,
+        rules: [...(current.rules || []), ...(parsed.parsed_ruleset.rules || [])],
+      };
+      const result = await K.api.applyRules(merged, draft);
+      setDraft("");
+      setParsed(null);
+      await reload();
+      onApplied?.(result.version);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  if (!entityType) return null;
+
+  // Filter rendered rules to those touching this entity_type. Server-rendered
+  // summaries follow a stable shape ("[allow] ingestion_agent reads
+  // Customer.name", "[hidden] sales sees AuditLog", etc.) — match against
+  // the type token in word boundaries to avoid Customer matching CustomerX.
+  const typeRe = new RegExp(`\\b${entityType}\\b`);
+  const filteredRules = rendered.rules.filter(
+    (r) => typeRe.test(r.summary || "") || typeRe.test(r.rego_body || r.rego || "")
+  );
+
+  const suggestions = POLICY_SUGGESTIONS_BY_TYPE[entityType] || [];
+
+  return (
+    <React.Fragment>
+      <div className={K.cls("drawer-overlay", open && "open")} onClick={onClose} aria-hidden={!open} />
+      <aside
+        className={K.cls("drawer policy-overlay", open && "open", shifted && "shifted")}
+        aria-hidden={!open}
+        role="dialog"
+        aria-label={`Policies for ${entityType}`}
+      >
+        <div className="drawer-head">
+          <span className="title">
+            policies · {entityType}
+          </span>
+          <button onClick={onClose} aria-label="Close">esc</button>
+        </div>
+        <div className="drawer-body policy-overlay-body">
+          {/* Section 1: Access matrix scoped to entityType */}
+          <div className="policy-section">
+            <h4 className="policy-section-heading">Access matrix</h4>
+            <K.AccessMatrixTable entityType={entityType} refresh={refresh} />
+          </div>
+
+          {/* Section 2: Rules filtered to entityType */}
+          <div className="policy-section">
+            <h4 className="policy-section-heading">
+              Rules <span className="policy-section-count">{filteredRules.length}</span>
+            </h4>
+            {loading && <p style={{ padding: 8, color: "var(--ink-3)", fontSize: 11 }}>loading…</p>}
+            {!loading && filteredRules.length === 0 && (
+              <p style={{ padding: 8, color: "var(--ink-3)", fontSize: 11 }}>
+                No rules touch <code>{entityType}</code> yet — add one via the chat below.
+              </p>
+            )}
+            {!loading && filteredRules.length > 0 && (
+              <div className="policy-list">
+                {filteredRules.map((r, i) => {
+                  const kind = policyKindOfSummary(r.summary);
+                  const isExpanded = expanded[i];
+                  return (
+                    <div
+                      key={i}
+                      className={K.cls("policy-row", `kind-${kind}`)}
+                      onClick={() => setExpanded({ ...expanded, [i]: !isExpanded })}
+                    >
+                      <div className="policy-row-main">
+                        <span className={K.cls("policy-kind", `kind-${kind}`)}>{kind}</span>
+                        <span className="policy-summary">{r.summary}</span>
+                        <span className="policy-toggle">{isExpanded ? "▾" : "▸"}</span>
+                      </div>
+                      {isExpanded && (
+                        <pre className="policy-rego">{r.rego_body || r.rego}</pre>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Section 3: NL editor */}
+          <div className="policy-section">
+            <h4 className="policy-section-heading">Edit</h4>
+            {suggestions.length > 0 && (
+              <div className="suggestion-row">
+                <span className="suggestion-label">Try:</span>
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    className="suggestion-chip kind-edit"
+                    onClick={() => {
+                      setDraft(s.text);
+                      setParsed(null);
+                    }}
+                    title={s.text}
+                  >
+                    <span className="chip-kind">edit</span>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="chat-box">
+              <textarea
+                className="chat-input"
+                placeholder={`describe a change to ${entityType} rules in plain English`}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={2}
+              />
+              <div className="chat-actions">
+                <span className={K.cls("parse-status", parsed && "parsed")}>
+                  {parsing
+                    ? "reading your request…"
+                    : parsed
+                      ? `${parsed.parsed_ruleset?.rules?.length || 0} change(s) ready — review, then apply`
+                      : "describe a change, then parse"}
+                </span>
+                <button className="primary" onClick={onParse} disabled={parsing || !draft.trim()}>
+                  parse
+                </button>
+              </div>
+            </div>
+            {/* When parse returned 0 rules, the LLM's notes explain *why*
+             * each intent was skipped (e.g. "Ticket isn't in the registered
+             * schema"). Surface that reasoning so the user isn't left
+             * staring at a silent "0 change(s) ready" prompt. */}
+            {parsed && (parsed.parsed_ruleset?.rules?.length || 0) === 0 && parsed.notes && (
+              <div className="parse-warn">
+                <div className="parse-warn-head">
+                  ⚠ {parsed.intents?.length || 0} intent
+                  {(parsed.intents?.length || 0) === 1 ? "" : "s"} parsed, 0 rules produced
+                </div>
+                <div className="parse-warn-body">{parsed.notes}</div>
+                <div className="parse-warn-hint">
+                  Tip: only registered entity types can be referenced. Currently
+                  registered: {schemaTypes.length > 0 ? schemaTypes.map((s) => s.name).join(", ") : "(loading…)"}.
+                </div>
+              </div>
+            )}
+            {parsed && parsed.parsed_ruleset?.rules?.length > 0 && (
+              <div className="edit-preview">
+                <div className="edit-preview-head">Pending changes</div>
+                {parsed.parsed_ruleset.rules.map((r, i) => (
+                  <div key={i} className="edit-row op-add">
+                    <span className="edit-op op-add">+ add</span>
+                    <span className="edit-summary">
+                      {describeParsedRule(r)}
+                      {parsed.notes && i === 0 && (
+                        <span className="edit-diff">{parsed.notes}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+                <div className="apply-row inline">
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      setParsed(null);
+                      setDraft("");
+                    }}
+                  >
+                    cancel
+                  </button>
+                  <button onClick={onApply} disabled={applying}>
+                    {applying ? "applying…" : "apply changes"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {error && (
+              <div style={{ color: "var(--bad)", fontFamily: "var(--mono)", fontSize: 10, padding: "6px 0" }}>
+                {error}
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
+    </React.Fragment>
+  );
+};
+
+// Mirror of the legacy PolicyEditor's helpers so PolicyOverlay can ship as a
+// self-contained component without app.jsx wiring.
+function policyKindOfSummary(summary) {
+  const lower = (summary || "").toLowerCase();
+  if (lower.includes("resolves")) return "conflict";
+  if (lower.startsWith("[hidden]") || lower.includes(" sees ")) return "access";
+  if (lower.includes(" writes ")) return "condition";
+  return "access";
+}
+
+function describeParsedRule(r) {
+  const a = r.agent_id || "*";
+  switch (r.type) {
+    case "field_read":
+      return `${r.allowed ? "allow" : "deny"} ${a} reads ${r.entity_type}.${r.field_name}`;
+    case "write":
+      return `${r.allowed ? "allow" : "deny"} ${a} writes ${r.entity_type}.${r.field_name || "*"}${r.requires_approval ? " (approval)" : ""}`;
+    case "entity_visibility":
+      return `${r.allowed ? "allow" : "hide"} ${a} sees ${r.entity_type}${r.entity_key ? `/${r.entity_key}` : ""}`;
+    case "conflict":
+      return `${r.resolver?.type || "?"} resolves ${r.entity_type}.${r.field_name}`;
+    default:
+      return JSON.stringify(r);
+  }
+}
 
 // ── Lineage Drawer ──────────────────────────────────────────────────────────
 // Reads `GET /entities/{type}/{key}` and renders the resolution as a vertical

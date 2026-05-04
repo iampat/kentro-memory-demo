@@ -122,9 +122,19 @@ def parse_nl_to_ruleset(
             rule = _RULE_ADAPTER.validate_json(parsed.rule_json)
         except ValidationError as exc:
             logger.info("parse_nl_to_ruleset: rule JSON failed schema validation: %s", exc)
+            # Surface the actual validation problem so callers can see WHY
+            # it failed (e.g. "field required", "wrong discriminator value")
+            # instead of a count. Each error is "<location>: <msg>"; the
+            # location is a tuple path through the JSON.
+            err_summaries = []
+            for e in exc.errors():
+                loc = ".".join(str(p) for p in e.get("loc", ()))
+                msg = e.get("msg", "")
+                err_summaries.append(f"{loc}: {msg}" if loc else msg)
+            details = "; ".join(err_summaries)
             skip_notes.append(
-                f"intent {raw.description!r}: rule JSON did not match Rule schema "
-                f"({exc.error_count()} errors)"
+                f"intent {raw.description!r}: LLM-produced rule did not match the "
+                f"Rule schema — {details}. Raw JSON: {parsed.rule_json}"
             )
             continue
 
