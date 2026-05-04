@@ -44,13 +44,22 @@ _AUTO_FALLBACK_DEFAULT: LatestWriteResolverSpec = LatestWriteResolverSpec()
 
 @dataclass(frozen=True)
 class ResolvedFieldValue:
-    """Output of `resolve()`. Caller (Step 7 read handler) builds the wire-form `FieldValue` from this."""
+    """Output of `resolve()`. Caller (Step 7 read handler) builds the wire-form `FieldValue` from this.
+
+    `actions` carries any workflow steps a SkillResolver wants executed
+    alongside the pick. The caller is responsible for executing them through
+    the same ACL gate as a regular write — `resolve()` itself is side-effect-
+    free (modulo the LLM call). PR 10-5 adds this field; the entities route
+    walks it after a successful resolve.
+    """
 
     status: FieldStatus
     winner: FieldWriteRow | None
     candidates: tuple[FieldWriteRow, ...]
     reason: str | None
     resolver_used: ResolverSpec
+    actions: tuple = ()  # tuple[SkillAction, ...] — kept untyped here to avoid
+    # importing SkillAction from skills/llm_client.py (would be a cycle).
 
 
 def resolve(
@@ -166,6 +175,7 @@ def resolve(
             candidates=tuple(candidates),
             reason=decision.reason,
             resolver_used=spec,
+            actions=decision.actions,
         )
 
     # Unreachable in practice — the discriminated union is closed.

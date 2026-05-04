@@ -1008,6 +1008,7 @@ function App() {
         acting={acting}
         onClose={() => setDrawer(null)}
       />
+      <K.EscalationToast />
     </div>
   );
 }

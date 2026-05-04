@@ -331,6 +331,68 @@ def test_skill_resolver_unresolved_when_decision_returns_none() -> None:
         raise AssertionError(f"skill reason should pass through, got {out.reason!r}")
 
 
+def test_skill_resolver_passes_decision_actions_through_resolved_field_value() -> None:
+    """PR 10-5: a SkillResolver decision can carry workflow `actions`. The
+    resolver must propagate them onto `ResolvedFieldValue.actions` so the
+    read-path orchestrator can dispatch them through the ACL gate."""
+    from kentro_server.skills.llm_client import (  # noqa: PLC0415 — test-local
+        NotifyAction,
+        WriteEntityAction,
+    )
+
+    transcript, email = _demo_conflict_candidates()
+    actions = (
+        WriteEntityAction(
+            entity_type="Customer",
+            entity_key="Acme",
+            field_name="sales_notes",
+            value_json='"escalated by skill"',
+        ),
+        NotifyAction(channel="#deals-review", message="$300K wins; review needed"),
+    )
+
+    @dataclass
+    class _ScriptedLLM(LLMClient):
+        def run_skill_resolver(self, *, prompt, candidates, model=None):
+            return SkillResolverDecision(
+                chosen_value_json="300000",
+                reason="written outweighs verbal",
+                actions=actions,
+            )
+
+        def extract_entities(
+            self, *, document_text, registered_schemas, document_label=None, model=None
+        ):
+            raise AssertionError("not under test")
+
+        def identify_nl_intents(self, *, text, model=None):
+            raise AssertionError("not under test")
+
+        def parse_nl_rule(
+            self,
+            *,
+            intent_description,
+            intent_kind,
+            registered_schemas,
+            known_agent_ids,
+            model=None,
+        ):
+            raise AssertionError("not under test")
+
+    out = resolve(
+        candidates=[transcript, email],
+        spec=SkillResolverSpec(prompt="written outweighs verbal"),
+        ruleset=_empty_ruleset(),
+        entity_type="Customer",
+        field_name="deal_size",
+        llm=_ScriptedLLM(),
+    )
+    if out.status != FieldStatus.KNOWN or out.winner is not email:
+        raise AssertionError(f"expected KNOWN/email, got {out}")
+    if out.actions != actions:
+        raise AssertionError(f"actions must propagate through resolve(), got {out.actions}")
+
+
 def test_skill_resolver_unresolved_when_decision_picks_unknown_value() -> None:
     """Defensive: if the LLM hallucinates a value not in candidates, we don't trust it."""
     transcript, email = _demo_conflict_candidates()
