@@ -97,43 +97,13 @@ window.K.EscalationToast = function EscalationToast() {
 
   if (toasts.length === 0) return null;
   return (
-    <div
-      style={{
-        position: "fixed",
-        right: 20,
-        bottom: 20,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        zIndex: 200,
-      }}
-    >
+    <div className="toast-stack">
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          onClick={() => dismissRef.current?.(t.id)}
-          style={{
-            background: "var(--surface, #1f2937)",
-            border: "1px solid var(--accent, #4ade80)",
-            borderLeft: "3px solid var(--accent, #4ade80)",
-            padding: "10px 14px",
-            minWidth: 280,
-            maxWidth: 360,
-            color: "var(--ink-1)",
-            fontFamily: "var(--mono)",
-            fontSize: 11,
-            cursor: "pointer",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-            animation: "kentroToastIn 0.3s ease",
-          }}
-        >
-          <div style={{ color: "var(--accent, #4ade80)", marginBottom: 4 }}>
-            ↳ skill notify · {t.channel}
-          </div>
-          <div style={{ color: "var(--ink-2)", lineHeight: 1.4 }}>{t.message}</div>
+        <div key={t.id} className="toast" onClick={() => dismissRef.current?.(t.id)}>
+          <div className="toast-channel">↳ skill notify · {t.channel}</div>
+          <div className="toast-msg">{t.message}</div>
         </div>
       ))}
-      <style>{`@keyframes kentroToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }`}</style>
     </div>
   );
 };

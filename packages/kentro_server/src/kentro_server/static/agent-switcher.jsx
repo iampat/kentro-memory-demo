@@ -1,10 +1,10 @@
 /* global React, K */
 // Header bar — agent switcher + connection state.
 //
-// Renders a compact "Acting as: [Sales ▾]" dropdown plus a tiny dot indicating
-// whether the page successfully booted the API (agent keys cached). On agent
-// switch, dispatches `kentro:actingAsChanged` (handled by api.js + listened
-// to in app.jsx to refetch).
+// Renders the brand mark + acting-as dropdown using the prototype's design
+// tokens (.agent-switcher class in styles.css). On agent switch, dispatches
+// `kentro:actingAsChanged`. On bootstrap success, dispatches
+// `kentro:bootstrapped` so panels know it's safe to fetch.
 
 const { useEffect, useState } = React;
 
@@ -23,7 +23,6 @@ window.K.AgentSwitcher = function AgentSwitcher() {
         setAgents(K.api.getAgentList());
         setActing(K.api.getActingAs());
         setBootState("ok");
-        // Tell consumers (App) the API is ready to accept reads.
         window.dispatchEvent(new CustomEvent("kentro:bootstrapped", { detail: result.payload }));
       } else {
         setBootState("error");
@@ -48,57 +47,23 @@ window.K.AgentSwitcher = function AgentSwitcher() {
   };
 
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "8px 14px",
-        borderBottom: "1px solid var(--line)",
-        background: "var(--surface)",
-        fontFamily: "var(--mono)",
-        fontSize: 11,
-        letterSpacing: "0.04em",
-      }}
-    >
-      <span style={{ color: "var(--ink-2)" }}>kentro · live</span>
-      <span
-        title={
-          bootState === "ok"
-            ? "agent keys cached from /demo/keys"
-            : bootState === "error"
-              ? `bootstrap failed: ${error}`
-              : "loading…"
-        }
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          background:
+    <div className="agent-switcher">
+      <span className="brand">
+        kentro · live
+        <span
+          className={`brand-dot ${bootState === "error" ? "error" : bootState === "idle" ? "idle" : ""}`}
+          title={
             bootState === "ok"
-              ? "var(--accent, #4ade80)"
+              ? "agent keys cached from /demo/keys"
               : bootState === "error"
-                ? "#ef4444"
-                : "#9ca3af",
-        }}
-      />
-      <span style={{ marginLeft: "auto", color: "var(--ink-2)" }}>acting as:</span>
-      <select
-        value={acting}
-        onChange={onChange}
-        disabled={agents.length === 0}
-        style={{
-          fontFamily: "var(--mono)",
-          fontSize: 11,
-          letterSpacing: "0.04em",
-          background: "var(--bg)",
-          color: "var(--ink-1)",
-          border: "1px solid var(--line)",
-          padding: "4px 8px",
-          minWidth: 200,
-        }}
-      >
-        {agents.length === 0 && <option>(no agents — bootstrap pending)</option>}
+                ? `bootstrap failed: ${error}`
+                : "loading…"
+          }
+        />
+      </span>
+      <span className="acting-label">acting as</span>
+      <select value={acting} onChange={onChange} disabled={agents.length === 0}>
+        {agents.length === 0 && <option>(bootstrap pending)</option>}
         {agents.map((a) => (
           <option key={a.agent_id} value={a.agent_id}>
             {a.display_name || a.agent_id}
@@ -106,9 +71,7 @@ window.K.AgentSwitcher = function AgentSwitcher() {
           </option>
         ))}
       </select>
-      {bootState === "error" && (
-        <span style={{ color: "#ef4444", fontSize: 10 }}>error: {error}</span>
-      )}
+      {bootState === "error" && <span className="err-msg">error: {error}</span>}
     </div>
   );
 };
