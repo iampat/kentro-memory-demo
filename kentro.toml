@@ -26,7 +26,7 @@ kentro_llm_cache_enabled = true
 
 # --- On-disk state root ---
 # Per-tenant subdirectories live under this path; the LLM cache also lives here.
-kentro_state_dir = "./kentro_state"
+kentro_state_dir = "./.kentro_state"
 
 # --- Tenants config file (Pydantic-shaped JSON) ---
 # Lives at the repo root by default — intentionally OUTSIDE `kentro_state_dir`

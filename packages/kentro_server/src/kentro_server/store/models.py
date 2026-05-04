@@ -1,6 +1,6 @@
 """SQLModel tables for kentro-server state.
 
-One SQLite database per tenant lives at `kentro_state/<tenant_id>/state.sqlite`.
+One SQLite database per tenant lives at `.kentro_state/<tenant_id>/state.sqlite`.
 Tenants themselves are configuration, not a DB row, so there is no `tenant` table.
 
 Conventions:
@@ -43,7 +43,7 @@ class DocumentRow(SQLModel, table=True):
     with documents ingested before this column existed.
 
     Note: adding this column to an EXISTING tenant DB requires either deleting
-    `kentro_state/<tenant>/state.sqlite` (clean re-seed) or running a manual
+    `.kentro_state/<tenant>/state.sqlite` (clean re-seed) or running a manual
     `ALTER TABLE document ADD COLUMN source_class VARCHAR;` — the lifespan's
     `SQLModel.metadata.create_all()` only creates missing tables, never alters
     existing ones. For dev-local upgrades, deleting state and re-seeding is

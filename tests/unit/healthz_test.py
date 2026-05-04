@@ -82,15 +82,21 @@ def test_static_ui_serves_named_files(isolated_state: None) -> None:
 def test_demo_keys_refused_when_opt_in_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex 2026-05-03 critical: a fresh tenants.json contains demo keys; the lifespan
+    """Codex 2026-05-03 critical: when `tenants.json` contains demo keys, the lifespan
     must refuse to boot unless KENTRO_ALLOW_DEMO_KEYS=true is set explicitly.
 
     This is the inverted failure mode — old `kentro_prod_mode=False` accepted the
     keys silently, leaking publicly-known bearer tokens on any non-loopback bind.
     Now the safe default is "refuse"; opt-in is required for local dev.
     """
+    tenants_path = tmp_path / "tenants.json"
+    tenants_path.write_text(
+        '{"tenants":[{"id":"t","display_name":"T","agents":['
+        '{"id":"a","api_key":"local-ingestion-do-not-share","is_admin":true}'
+        "]}]}\n"
+    )
     monkeypatch.setenv("KENTRO_STATE_DIR", str(tmp_path / "kentro_state"))
-    monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tmp_path / "tenants.json"))
+    monkeypatch.setenv("KENTRO_TENANTS_JSON", str(tenants_path))
     monkeypatch.delenv("KENTRO_ALLOW_DEMO_KEYS", raising=False)
     if not Settings().anthropic_api_key:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used-here")
