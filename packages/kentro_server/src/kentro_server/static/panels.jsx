@@ -1677,20 +1677,34 @@ function LineageFlow({
 // Loads the active policy on mount, lets the user pick a resolver type +
 // type-specific fields, then POSTs to /resolvers/apply. Hosted by
 // ResolverDrawer (drawer chrome supplies the title + close button).
+// Resolver types that the editor exposes as user-selectable options. The
+// backend supports two more — `raw` and `prefer_agent` — but those are
+// legacy/specialised and we don't surface them as new choices. If a saved
+// policy uses one of them, we render a migration banner instead of silently
+// rewriting it (the previous behaviour, which was a destructive regression
+// on top of any state created via the API or older UI versions).
+const USER_FACING_RESOLVER_TYPES = ["latest_write", "skill", "auto"];
+
 function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
+  // `loadedResolver` is the resolver as it currently exists on the server —
+  // null while loading, null when no policy is saved, otherwise the
+  // backend-shape resolver object. We track it separately from the editor's
+  // working state so a legacy type can be detected and preserved.
+  const [loadedResolver, setLoadedResolver] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [resolverType, setResolverType] = useState("latest_write");
   const [prompt, setPrompt] = useState("");
+  const [migrating, setMigrating] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    // Reset to defaults before fetching so a target with no saved policy
-    // lands on `latest_write` with empty prompt instead of inheriting the
-    // previous field's state. (The drawer also remounts via a `key` on
-    // target change — this branch defends against in-place prop updates.)
+    setLoadedResolver(null);
+    setLoaded(false);
     setResolverType("latest_write");
     setPrompt("");
+    setMigrating(false);
     setError(null);
     K.api
       .getResolvers()
@@ -1699,22 +1713,27 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
         const policy = (set.policies || []).find(
           (p) => p.entity_type === entityType && p.field_name === fieldName
         );
-        if (!policy) return;
-        const r = policy.resolver || {};
-        // Only the three user-facing types are selectable; legacy
-        // `prefer_agent` / `raw` saved policies fall back to `latest_write`
-        // so the dropdown stays in a valid state.
-        const allowed = new Set(["latest_write", "skill", "auto"]);
-        setResolverType(allowed.has(r.type) ? r.type : "latest_write");
-        if (r.type === "skill") setPrompt(r.prompt || "");
+        const r = policy ? policy.resolver || {} : null;
+        setLoadedResolver(r);
+        if (r && USER_FACING_RESOLVER_TYPES.includes(r.type)) {
+          setResolverType(r.type);
+          if (r.type === "skill") setPrompt(r.prompt || "");
+        }
+        // Legacy types: leave editor state at defaults but DO NOT submit
+        // until the user explicitly chooses to migrate. The render branch
+        // below shows a banner with a "replace" button.
+        setLoaded(true);
       })
       .catch(() => {
-        // ignore — defaults stand
+        setLoaded(true);
       });
     return () => {
       cancelled = true;
     };
   }, [entityType, fieldName]);
+
+  const isLegacy =
+    loadedResolver && !USER_FACING_RESOLVER_TYPES.includes(loadedResolver.type);
 
   const apply = async () => {
     setApplying(true);
@@ -1741,8 +1760,47 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
     }
   };
 
+  if (!loaded) {
+    return <div className="resolver-form resolver-form-loading">loading…</div>;
+  }
+
+  // Legacy resolver, not yet migrating: surface the existing policy and
+  // require an explicit "replace" before showing the editor. This prevents
+  // an inadvertent Apply from rewriting `prefer_agent`/`raw` to whatever
+  // the dropdown happens to be defaulted to.
+  if (isLegacy && !migrating) {
+    return (
+      <div className="resolver-form">
+        <div className="resolver-editor-legacy">
+          <div className="resolver-editor-legacy-title">legacy resolver</div>
+          <div className="resolver-editor-legacy-body">
+            This field uses a <code>{loadedResolver.type}</code> resolver, which
+            isn't editable from this form. Replacing it will overwrite the
+            existing policy.
+          </div>
+          <pre className="resolver-editor-legacy-pre">
+            {JSON.stringify(loadedResolver, null, 2)}
+          </pre>
+        </div>
+        <div className="resolver-editor-actions">
+          <button onClick={onCancel} className="secondary">
+            cancel
+          </button>
+          <button onClick={() => setMigrating(true)} className="primary">
+            replace…
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="resolver-form">
+      {isLegacy && migrating && (
+        <div className="resolver-editor-migrate-note">
+          replacing legacy <code>{loadedResolver.type}</code> resolver
+        </div>
+      )}
       <label className="resolver-editor-row">
         <span className="resolver-editor-label">type</span>
         <select value={resolverType} onChange={(e) => setResolverType(e.target.value)}>

@@ -1332,6 +1332,13 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .drawer.drawer-deep {
   right: 1160px;
   width: 380px;
+  /* Clamp left edge to the viewport: at 1440 the deep slot only has
+   * (1440 - 1160) = 280px of horizontal room before the left edge of the
+   * viewport, so a 380px drawer would clip 100px off the left. The
+   * max-width keeps an 8px gutter from the viewport edge regardless of
+   * the natural width below. The fallback `width` still applies on
+   * >=1548 viewports where the full width fits. */
+  max-width: calc(100vw - 1168px);
   z-index: 100;
 }
 .drawer.drawer-deep.open {
@@ -1341,6 +1348,21 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 /* SourceDrawer needs more horizontal room than the resolver form. */
 .drawer.drawer-deep.drawer-deep-wide {
   width: 480px;
+  max-width: calc(100vw - 1168px);
+}
+/* Below ~1540px viewport width the deep slot can't host a usable drawer
+ * to the left of the lineage drawer. Collapse the deep slot into the
+ * lineage slot — the deep drawer overlays the lineage drawer (z-index 102
+ * when open already covers the lineage drawer at 101) instead of stacking
+ * to its left. The closed-state z-index trick from the base rule still
+ * keeps the closed deep drawer hidden behind lineage. */
+@media (max-width: 1539px) {
+  .drawer.drawer-deep,
+  .drawer.drawer-deep.drawer-deep-wide {
+    right: 440px;
+    width: 720px;
+    max-width: calc(100vw - 448px);
+  }
 }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -2826,4 +2848,63 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   background: transparent;
   color: var(--ink-2);
   border: 1px solid var(--line);
+}
+.resolver-form-loading {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 6px 2px;
+}
+.resolver-editor-legacy {
+  border: 1px solid oklch(0.85 0.08 75);
+  background: oklch(0.985 0.025 80);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.resolver-editor-legacy-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: oklch(0.45 0.13 70);
+}
+.resolver-editor-legacy-body {
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+.resolver-editor-legacy-body code,
+.resolver-editor-migrate-note code {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  background: oklch(0.95 0.04 80);
+  border-radius: 4px;
+}
+.resolver-editor-legacy-pre {
+  font-family: var(--mono);
+  font-size: 11px;
+  margin: 0;
+  padding: 8px 10px;
+  background: oklch(0.99 0.005 260);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  color: var(--ink-2);
+}
+.resolver-editor-migrate-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 8px;
+  background: oklch(0.97 0.02 80);
+  border: 1px dashed oklch(0.82 0.08 75);
+  border-radius: 6px;
 }
