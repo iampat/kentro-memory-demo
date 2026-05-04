@@ -203,6 +203,18 @@ window.K = window.K || {};
     return _fetch("/rules/active");
   }
 
+  async function getResolvers() {
+    return _fetch("/resolvers/active");
+  }
+
+  async function applyResolvers(policies, summary) {
+    return _fetch("/resolvers/apply", {
+      method: "POST",
+      body: JSON.stringify({ policies, summary }),
+      elevateToAdmin: true,
+    });
+  }
+
   async function getStats() {
     return _fetch("/llm/stats");
   }
@@ -279,9 +291,11 @@ window.K = window.K || {};
     getRulesRendered,
     listSchema,
     getRules,
+    getResolvers,
     getStats,
     // writes
     applyRules,
+    applyResolvers,
     parseNL,
     writeField,
     ingestDocument,

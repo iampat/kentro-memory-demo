@@ -94,7 +94,6 @@ function App() {
   const bumpRefresh = useCallback(() => setRefresh((n) => n + 1), []);
   const [documents, setDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(true);
-  const [conflictPolicy, setConflictPolicy] = useState("auto");
   const [ruleVersion, setRuleVersion] = useState(0);
   const [seeding, setSeeding] = useState(false);
   const [seedError, setSeedError] = useState(null);
@@ -116,22 +115,7 @@ function App() {
       }
       try {
         const r = await K.api.getRules();
-        if (!cancelled) {
-          setRuleVersion(r.version || 0);
-          const conflicts = (r.rules || []).filter((rl) => rl.type === "conflict");
-          if (conflicts.length > 0) {
-            const r0 = conflicts[0].resolver?.type || "auto";
-            setConflictPolicy(
-              r0 === "skill"
-                ? "written outweighs verbal"
-                : r0 === "latest_write"
-                  ? "latest write wins"
-                  : r0
-            );
-          } else {
-            setConflictPolicy("auto");
-          }
-        }
+        if (!cancelled) setRuleVersion(r.version || 0);
       } catch {
         // ignore
       }
@@ -239,9 +223,6 @@ function App() {
           title="Active rule set version — increments on every /rules/apply"
         >
           <span className="dot"></span>Rules · version {ruleVersion}
-        </span>
-        <span className="rule-chip" title="How conflicting values are resolved at read time">
-          Conflict policy: {conflictPolicy}
         </span>
       </div>
 
