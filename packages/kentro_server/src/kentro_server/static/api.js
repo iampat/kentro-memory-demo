@@ -73,23 +73,36 @@ window.K = window.K || {};
   // ── Bootstrap ─────────────────────────────────────────────────────────────
   //
   // Called once on page load. Tries any cached admin key first; if /demo/keys
-  // returns 200 we cache the full list. If 401 (unknown key) the cache was
-  // stale; if 404 the server isn't in demo-keys mode — UI prompts manual entry
-  // (out of scope for Stage A; we just leave cache empty).
+  // returns 200 we cache the full list. If 401 (unknown key) or 403 (key not
+  // admin — happens after a `task reset` rotates tenant keys), the cache is
+  // stale and we retry with the well-known local default before giving up.
+  // If 404 the server isn't in demo-keys mode — UI prompts manual entry (out
+  // of scope for Stage A; we just leave cache empty).
+
+  const DEFAULT_ADMIN_KEY = "local-admin-do-not-share";
+
+  async function _tryDemoKeys(adminKey) {
+    return fetch("/demo/keys", {
+      headers: { Authorization: `Bearer ${adminKey}` },
+    });
+  }
 
   async function bootstrap(initialAdminKeyGuess) {
-    // Try the cached admin key first.
-    let adminKey = getAdminKey() || initialAdminKeyGuess;
-    if (!adminKey) {
-      // Fall back to the well-known local default. The admin agent (is_admin
-      // for ACL-bypassed reads + control-plane operations) is separate from
-      // the ingestion_agent worker that writes extracted facts.
-      adminKey = "local-admin-do-not-share";
-    }
+    // Try the cached admin key first; fall back to the well-known local
+    // default. The admin agent (is_admin for ACL-bypassed reads + control-
+    // plane operations) is separate from the ingestion_agent worker that
+    // writes extracted facts.
+    const cachedKey = getAdminKey() || initialAdminKeyGuess;
+    const adminKey = cachedKey || DEFAULT_ADMIN_KEY;
     try {
-      const r = await fetch("/demo/keys", {
-        headers: { Authorization: `Bearer ${adminKey}` },
-      });
+      let r = await _tryDemoKeys(adminKey);
+      // Stale cache: cached key isn't recognised (401) or is no longer admin
+      // (403, e.g. after `task reset` regenerated tenant keys). Retry with
+      // the hardcoded default so the UI self-heals on a tenant rotation.
+      if ((r.status === 401 || r.status === 403) && adminKey !== DEFAULT_ADMIN_KEY) {
+        localStorage.removeItem(LS_KEYS);
+        r = await _tryDemoKeys(DEFAULT_ADMIN_KEY);
+      }
       if (r.status === 200) {
         const payload = await r.json();
         writeCachedKeys(payload);

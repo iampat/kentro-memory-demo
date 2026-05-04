@@ -72,6 +72,16 @@ function App() {
   const [drawerPayload, setDrawerPayload] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [policyEntityType, setPolicyEntityType] = useState(null);
+  // Stacked drawer model:
+  //   • LineageDrawer at right:440 (middle slot) — stays open while the user
+  //     drills into a source or the resolver.
+  //   • SourceDrawer / ResolverDrawer at right:1160 (deep slot, left of
+  //     lineage) — mutex with EACH OTHER; opening one closes the other.
+  //     Lineage is unaffected by their toggles.
+  // closeLineage cascades both deep drawers (their parent context is gone).
+  const [resolverTarget, setResolverTarget] = useState(null);
+  const [lineageSourceDocId, setLineageSourceDocId] = useState(null);
+  const [lineageRefreshKey, setLineageRefreshKey] = useState(0);
   const openSourceDoc = useCallback((id) => {
     setEntityPayload(null);
     setSourceDocId(id);
@@ -82,12 +92,39 @@ function App() {
   }, []);
   const openLineage = useCallback((payload) => {
     setPolicyEntityType(null);
+    setResolverTarget(null);
+    setLineageSourceDocId(null);
     setDrawerPayload(payload);
     setDrawerOpen(true);
   }, []);
   const openPolicy = useCallback((entityType) => {
     setDrawerOpen(false);
+    setResolverTarget(null);
+    setLineageSourceDocId(null);
     setPolicyEntityType(entityType);
+  }, []);
+  // Opening the resolver clears any source drawer (deep-slot mutex). Lineage
+  // stays open behind it.
+  const openResolver = useCallback((target) => {
+    setLineageSourceDocId(null);
+    setResolverTarget(target);
+  }, []);
+  const closeResolver = useCallback(() => setResolverTarget(null), []);
+  // Source drawer for in-lineage candidate clicks. Mutex with resolver in
+  // the deep slot. Distinct from `openSourceDoc` (which is the right-rail
+  // SourceOverlay used by direct graph-doc node clicks). Lineage stays open.
+  const openLineageSource = useCallback((id) => {
+    setResolverTarget(null);
+    setLineageSourceDocId(id);
+  }, []);
+  const closeLineageSource = useCallback(() => setLineageSourceDocId(null), []);
+  // Closing the lineage drawer fully dismisses the slot — also clears any
+  // lingering source/resolver state (defensive; under single-drawer model
+  // they should already be null).
+  const closeLineage = useCallback(() => {
+    setDrawerOpen(false);
+    setResolverTarget(null);
+    setLineageSourceDocId(null);
   }, []);
 
   const [refresh, setRefresh] = useState(0);
@@ -241,8 +278,26 @@ function App() {
       <K.LineageDrawer
         open={drawerOpen}
         payload={drawerPayload}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeLineage}
         documents={documents}
+        onEditResolver={openResolver}
+        onOpenDoc={openLineageSource}
+        refreshKey={lineageRefreshKey}
+      />
+      <K.SourceDrawer
+        open={!!lineageSourceDocId}
+        documentId={lineageSourceDocId}
+        onClose={closeLineageSource}
+      />
+      <K.ResolverDrawer
+        open={!!resolverTarget}
+        target={resolverTarget}
+        onClose={closeResolver}
+        onApplied={() => {
+          closeResolver();
+          setLineageRefreshKey((k) => k + 1);
+          bumpRefresh();
+        }}
       />
       <K.PolicyOverlay
         open={!!policyEntityType}

@@ -17,7 +17,6 @@ from kentro.types import (
     AutoResolverSpec,
     FieldStatus,
     LatestWriteResolverSpec,
-    PreferAgentResolverSpec,
     RawResolverSpec,
     ResolverPolicy,
     ResolverPolicySet,
@@ -158,39 +157,6 @@ def test_latest_write_picks_email() -> None:
     if out.status != FieldStatus.KNOWN or out.winner is not email:
         raise AssertionError(
             f"LatestWrite should pick the email, got status={out.status} winner={out.winner}"
-        )
-
-
-def test_prefer_agent_picks_matching_when_match_exists() -> None:
-    transcript = _w("250000", agent_id="ingestion_agent", at=T0)
-    email_correction = _w("300000", agent_id="manual_sales", at=T1)
-    out = resolve(
-        candidates=[transcript, email_correction],
-        spec=PreferAgentResolverSpec(agent_id="manual_sales"),
-        resolver_policies=_empty_policies(),
-        entity_type="Customer",
-        field_name="deal_size",
-        llm=OfflineLLMClient(),
-    )
-    if out.status != FieldStatus.KNOWN or out.winner is not email_correction:
-        raise AssertionError(f"PreferAgent should pick the manual_sales row, got {out}")
-
-
-def test_prefer_agent_no_match_returns_unresolved() -> None:
-    transcript, email = _demo_conflict_candidates()
-    out = resolve(
-        candidates=[transcript, email],
-        spec=PreferAgentResolverSpec(agent_id="auditor"),
-        resolver_policies=_empty_policies(),
-        entity_type="Customer",
-        field_name="deal_size",
-        llm=OfflineLLMClient(),
-    )
-    if out.status != FieldStatus.UNRESOLVED:
-        raise AssertionError("no-match PreferAgent must be UNRESOLVED")
-    if out.reason is None or "auditor" not in out.reason:
-        raise AssertionError(
-            f"PreferAgent reason should name the missing agent, got {out.reason!r}"
         )
 
 

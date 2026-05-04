@@ -113,7 +113,7 @@ def read(
     llm: LLMClientDep,
     event_bus: EventBusDep,
 ) -> EntityRecord:
-    """Read with an explicit ResolverSpec (raw / latest_write / prefer_agent / skill / auto)."""
+    """Read with an explicit ResolverSpec (raw / latest_write / skill / auto)."""
     ruleset = load_active_ruleset(principal.store)
     return read_entity(
         store=principal.store,

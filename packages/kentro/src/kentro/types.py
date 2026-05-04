@@ -48,12 +48,6 @@ class LatestWriteResolverSpec(BaseModel):
     type: Literal["latest_write"] = "latest_write"
 
 
-class PreferAgentResolverSpec(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    type: Literal["prefer_agent"] = "prefer_agent"
-    agent_id: str
-
-
 class SkillResolverSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
     type: Literal["skill"] = "skill"
@@ -67,11 +61,7 @@ class AutoResolverSpec(BaseModel):
 
 
 ResolverSpec = Annotated[
-    RawResolverSpec
-    | LatestWriteResolverSpec
-    | PreferAgentResolverSpec
-    | SkillResolverSpec
-    | AutoResolverSpec,
+    RawResolverSpec | LatestWriteResolverSpec | SkillResolverSpec | AutoResolverSpec,
     Field(discriminator="type"),
 ]
 
@@ -534,7 +524,6 @@ __all__ = [
     "LineageRecord",
     "NLIntent",
     "NLResponse",
-    "PreferAgentResolverSpec",
     "ReevaluationReport",
     "ResolverPolicy",
     "ResolverPolicySet",

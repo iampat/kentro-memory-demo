@@ -1412,13 +1412,24 @@ function describeParsedRule(r) {
 // `documents` (optional) maps doc IDs to their labels + source_class so we
 // can show "📞 acme_call_2026-04-15.md" rather than "doc:abc12345" — same
 // chrome the rest of the demo uses.
-window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifted, documents }) {
+window.K.LineageDrawer = function LineageDrawer({
+  open,
+  payload,
+  onClose,
+  shifted,
+  documents,
+  onEditResolver,
+  onOpenDoc,
+  refreshKey,
+}) {
   const [record, setRecord] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [policyResolver, setPolicyResolver] = useState(null);
 
   useEffect(() => {
     if (!open || !payload) {
       setRecord(null);
+      setPolicyResolver(null);
       return;
     }
     let cancelled = false;
@@ -1434,20 +1445,40 @@ window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifte
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    K.api
+      .getResolvers()
+      .then((set) => {
+        if (cancelled) return;
+        const policy = (set.policies || []).find(
+          (p) => p.entity_type === payload.entity_type && p.field_name === payload.field_name
+        );
+        setPolicyResolver(policy?.resolver || null);
+      })
+      .catch(() => {
+        if (!cancelled) setPolicyResolver(null);
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, payload]);
+  }, [open, payload, refreshKey]);
 
   // ESC closes the drawer *first* — without this, EntityOverlay's window-
   // level Escape handler eats the keystroke and the user can't dismiss the
   // drawer with the keyboard while EntityOverlay is open. Capture phase +
   // stopImmediatePropagation makes our handler fire before any sibling
   // overlay's bubbling listener sees the event.
+  //
+  // Defer ESC to the deep drawer (Source or Resolver) when one is open —
+  // that drawer stacks left of lineage and should close first so the user
+  // dismisses panels in last-in/first-out order. Our listener was registered
+  // before the deep drawer's (lineage opens first), so without this guard
+  // our handler fires first, calls stopImmediatePropagation, and the deep
+  // drawer's listener never runs.
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
       if (e.key !== "Escape") return;
+      if (document.querySelector(".drawer.drawer-deep.open")) return;
       e.stopImmediatePropagation();
       e.stopPropagation();
       onClose();
@@ -1480,16 +1511,9 @@ window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifte
               docById={docById}
               entityType={payload.entity_type}
               fieldName={fname}
-              onApplied={() => {
-                // Re-fetch the field after a resolver change so the flow
-                // (RESOLVER chip + RESULT) reflects the new winner.
-                if (open && payload) {
-                  K.api
-                    .readEntityAs(payload.agent_id, payload.entity_type, payload.entity_key)
-                    .then((r) => setRecord(r))
-                    .catch(() => setRecord(null));
-                }
-              }}
+              onEditResolver={onEditResolver}
+              onOpenDoc={onOpenDoc}
+              policyResolver={policyResolver}
             />
           )}
           {!loading && !fval && (
@@ -1521,7 +1545,15 @@ window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifte
 // corroborating it), `unresolved` (multiple distinct candidates), `hidden`
 // (ACL-redacted), `unknown` (no writes yet). Connectors carry animated dots
 // so the read pipeline looks alive even when the data is settled.
-function LineageFlow({ fval, docById, entityType, fieldName, onApplied }) {
+function LineageFlow({
+  fval,
+  docById,
+  entityType,
+  fieldName,
+  onEditResolver,
+  onOpenDoc,
+  policyResolver,
+}) {
   if (fval.status === "hidden") {
     return (
       <div className="flow flow-stub">
@@ -1577,13 +1609,24 @@ function LineageFlow({ fval, docById, entityType, fieldName, onApplied }) {
   const distinctSourceValues = new Set(cands.map((c) => JSON.stringify(c.value))).size;
   const isCorroboration = isKnown && distinctSourceValues === 1 && cands.length > 1;
   const isLatestPick = isKnown && distinctSourceValues > 1;
+  // Prefer the actual configured resolver type when one exists — the chip
+  // should reflect what's wired up, not a value-derived guess. Falls back to
+  // the heuristic labels for status (corroboration/direct/conflict) when no
+  // explicit policy is set, or for non-resolution cases (single source).
+  const policyType = policyResolver?.type;
+  const resolverTypeLabel =
+    policyType === "auto"
+      ? "auto ✨ Kentro AI"
+      : policyType
+        ? `${policyType.replace(/_/g, " ")} resolver`
+        : null;
   const resolverName = !isKnown
     ? "conflict"
     : isCorroboration
-      ? "corroboration"
+      ? resolverTypeLabel || "corroboration"
       : isLatestPick
-        ? "latest write"
-        : "direct";
+        ? resolverTypeLabel || "latest write resolver"
+        : resolverTypeLabel || "direct";
   const resolverDetail = isKnown
     ? `${cands.length} → ${distinctSourceValues} value${distinctSourceValues === 1 ? "" : "s"}`
     : `${cands.length} → ${distinctSourceValues} values`;
@@ -1620,32 +1663,49 @@ function LineageFlow({ fval, docById, entityType, fieldName, onApplied }) {
       resolverDetail={resolverDetail}
       reason={fval.reason}
       resultLabel={isKnown ? K.fmtFieldValue(fval) : "no winner"}
+      resultValue={isKnown ? fval.value : null}
       resultStatus={fval.status}
       entityType={entityType}
       fieldName={fieldName}
-      onApplied={onApplied}
+      onEditResolver={onEditResolver}
+      onOpenDoc={onOpenDoc}
     />
   );
 }
 
-// Inline editor that swaps the resolver for one (entity_type, field_name)
-// pair. Lives directly under the RESOLVER chip in the lineage drawer; click
-// the chip to toggle. Loads the active policy on open, lets the user pick
-// a resolver type + type-specific fields, then POSTs to /resolvers/apply.
-// On success, parent re-fetches the entity record so the flow re-renders
-// with the new winner highlighted.
-function ResolverEditor({ entityType, fieldName, onClose, onApplied }) {
+// Form body for editing the resolver of one (entity_type, field_name) pair.
+// Loads the active policy on mount, lets the user pick a resolver type +
+// type-specific fields, then POSTs to /resolvers/apply. Hosted by
+// ResolverDrawer (drawer chrome supplies the title + close button).
+// Resolver types that the editor exposes as user-selectable options. The
+// backend also supports `raw` (return all candidates without picking) but
+// that's a diagnostic affordance, not a stored policy choice — we don't
+// surface it here. If a saved policy ever uses `raw` we render a migration
+// banner instead of silently rewriting it (which would be a destructive
+// regression on top of any state created via the API or older UI versions).
+const USER_FACING_RESOLVER_TYPES = ["latest_write", "skill", "auto"];
+
+function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
+  // `loadedResolver` is the resolver as it currently exists on the server —
+  // null while loading, null when no policy is saved, otherwise the
+  // backend-shape resolver object. We track it separately from the editor's
+  // working state so a legacy type can be detected and preserved.
+  const [loadedResolver, setLoadedResolver] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [resolverType, setResolverType] = useState("latest_write");
-  const [agentId, setAgentId] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [migrating, setMigrating] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState(null);
 
-  // Load the active policy for this (type, field) so the editor opens
-  // pre-populated with the current resolver. Fall through to LatestWrite if
-  // no policy exists.
   useEffect(() => {
     let cancelled = false;
+    setLoadedResolver(null);
+    setLoaded(false);
+    setResolverType("latest_write");
+    setPrompt("");
+    setMigrating(false);
+    setError(null);
     K.api
       .getResolvers()
       .then((set) => {
@@ -1653,33 +1713,33 @@ function ResolverEditor({ entityType, fieldName, onClose, onApplied }) {
         const policy = (set.policies || []).find(
           (p) => p.entity_type === entityType && p.field_name === fieldName
         );
-        if (!policy) return;
-        const r = policy.resolver || {};
-        setResolverType(r.type || "latest_write");
-        if (r.type === "prefer_agent") setAgentId(r.agent_id || "");
-        if (r.type === "skill") setPrompt(r.prompt || "");
+        const r = policy ? policy.resolver || {} : null;
+        setLoadedResolver(r);
+        if (r && USER_FACING_RESOLVER_TYPES.includes(r.type)) {
+          setResolverType(r.type);
+          if (r.type === "skill") setPrompt(r.prompt || "");
+        }
+        // Legacy types: leave editor state at defaults but DO NOT submit
+        // until the user explicitly chooses to migrate. The render branch
+        // below shows a banner with a "replace" button.
+        setLoaded(true);
       })
       .catch(() => {
-        // ignore — defaults stand
+        setLoaded(true);
       });
     return () => {
       cancelled = true;
     };
   }, [entityType, fieldName]);
 
+  const isLegacy =
+    loadedResolver && !USER_FACING_RESOLVER_TYPES.includes(loadedResolver.type);
+
   const apply = async () => {
     setApplying(true);
     setError(null);
     try {
       const resolver = { type: resolverType };
-      if (resolverType === "prefer_agent") {
-        if (!agentId.trim()) {
-          setError("agent_id is required for prefer_agent");
-          setApplying(false);
-          return;
-        }
-        resolver.agent_id = agentId.trim();
-      }
       if (resolverType === "skill") {
         if (!prompt.trim()) {
           setError("prompt is required for skill resolver");
@@ -1700,34 +1760,55 @@ function ResolverEditor({ entityType, fieldName, onClose, onApplied }) {
     }
   };
 
-  return (
-    <div className="resolver-editor">
-      <div className="resolver-editor-head">
-        <span className="resolver-editor-title">Edit resolver</span>
-        <button onClick={onClose} className="resolver-editor-close" aria-label="Close">
-          ×
-        </button>
+  if (!loaded) {
+    return <div className="resolver-form resolver-form-loading">loading…</div>;
+  }
+
+  // Legacy resolver, not yet migrating: surface the existing policy and
+  // require an explicit "replace" before showing the editor. This prevents
+  // an inadvertent Apply from rewriting a non-user-facing type (e.g. `raw`)
+  // to whatever the dropdown happens to be defaulted to.
+  if (isLegacy && !migrating) {
+    return (
+      <div className="resolver-form">
+        <div className="resolver-editor-legacy">
+          <div className="resolver-editor-legacy-title">legacy resolver</div>
+          <div className="resolver-editor-legacy-body">
+            This field uses a <code>{loadedResolver.type}</code> resolver, which
+            isn't editable from this form. Replacing it will overwrite the
+            existing policy.
+          </div>
+          <pre className="resolver-editor-legacy-pre">
+            {JSON.stringify(loadedResolver, null, 2)}
+          </pre>
+        </div>
+        <div className="resolver-editor-actions">
+          <button onClick={onCancel} className="secondary">
+            cancel
+          </button>
+          <button onClick={() => setMigrating(true)} className="primary">
+            replace…
+          </button>
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="resolver-form">
+      {isLegacy && migrating && (
+        <div className="resolver-editor-migrate-note">
+          replacing legacy <code>{loadedResolver.type}</code> resolver
+        </div>
+      )}
       <label className="resolver-editor-row">
         <span className="resolver-editor-label">type</span>
         <select value={resolverType} onChange={(e) => setResolverType(e.target.value)}>
           <option value="latest_write">latest_write — newest wins</option>
-          <option value="prefer_agent">prefer_agent — winner from a chosen agent</option>
           <option value="skill">skill — LLM picks per a domain prompt</option>
-          <option value="raw">raw — never pick a winner</option>
-          <option value="auto">auto — fall through to default</option>
+          <option value="auto">auto ✨ — Kentro AI picks the best strategy</option>
         </select>
       </label>
-      {resolverType === "prefer_agent" && (
-        <label className="resolver-editor-row">
-          <span className="resolver-editor-label">agent_id</span>
-          <input
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            placeholder="e.g. sales"
-          />
-        </label>
-      )}
       {resolverType === "skill" && (
         <label className="resolver-editor-row resolver-editor-row-prompt">
           <span className="resolver-editor-label">prompt</span>
@@ -1741,13 +1822,249 @@ function ResolverEditor({ entityType, fieldName, onClose, onApplied }) {
       )}
       {error && <div className="resolver-editor-error">{error}</div>}
       <div className="resolver-editor-actions">
-        <button onClick={onClose} className="secondary" disabled={applying}>
+        <button onClick={onCancel} className="secondary" disabled={applying}>
           cancel
         </button>
         <button onClick={apply} className="primary" disabled={applying}>
           {applying ? "applying…" : "apply"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Source drawer — sibling of ResolverDrawer in the same deep slot
+// (right: 1160px). Opens when the user clicks a candidate card in the
+// lineage flow; mutually exclusive with ResolverDrawer (only one of the
+// two deep drawers is ever rendered at a time, decided in app.jsx). Kept
+// here next to ResolverDrawer so both deep-drawer components live together.
+window.K.SourceDrawer = function SourceDrawer({ open, documentId, onClose }) {
+  const [doc, setDoc] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!open || !documentId) {
+      setDoc(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    K.api
+      .getDocumentContent(documentId)
+      .then((d) => {
+        if (!cancelled) setDoc(d);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, documentId]);
+
+  // ESC closes this drawer first — capture phase + stopImmediatePropagation
+  // so it beats the LineageDrawer behind it. The lineage handler already
+  // bails when any `.drawer.drawer-deep.open` is present, so this is the
+  // belt-and-suspenders companion to that DOM check.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!documentId) return null;
+  const meta = doc ? K.docMeta({ source_class: doc.source_class, label: doc.label }) : null;
+  return (
+    <React.Fragment>
+      <aside
+        className={K.cls("drawer drawer-deep drawer-deep-wide", open && "open")}
+        aria-hidden={!open}
+        role="dialog"
+        aria-label="Source content"
+      >
+        <div className="drawer-head">
+          <span className="title">
+            {meta ? `${meta.icon} ${meta.typeLabel}` : "source"}
+            {doc && doc.label && <span> · {K.docLabel(doc.label)}</span>}
+          </span>
+          <button onClick={onClose} aria-label="Close">esc</button>
+        </div>
+        <div className="drawer-body">
+          {loading && <p style={{ color: "var(--ink-3)" }}>loading content…</p>}
+          {error && <p style={{ color: "var(--bad)" }}>failed to load: {error}</p>}
+          {!loading && !error && doc && (
+            <React.Fragment>
+              <DocumentBody doc={doc} />
+              <div className="source-overlay-trace">
+                <h4 className="source-overlay-trace-heading">Extraction trace</h4>
+                <K.ExtractionStepsList documentId={documentId} docLabel={doc.label} />
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      </aside>
+    </React.Fragment>
+  );
+};
+
+// Resolver drawer — third stacked left-of-right-rail panel (slot at
+// right: 1160px), opening one slot deeper than LineageDrawer (which sits at
+// right: 440px, immediately left of the permanent right rail). Kept narrower
+// than the lineage drawer because the form is small. Click the RESOLVER chip
+// inside LineageDrawer to open it; the lineage drawer remains visible behind
+// it so the candidate flow stays in view while editing. Mutually exclusive
+// with SourceDrawer (the sibling in the same slot).
+window.K.ResolverDrawer = function ResolverDrawer({ open, target, onClose, onApplied }) {
+  // ESC closes the resolver drawer FIRST, ahead of LineageDrawer/EntityOverlay
+  // listeners — capture phase + stopImmediatePropagation, same shape as the
+  // other left-stacked drawers in this app.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!target) return null;
+  return (
+    <React.Fragment>
+      <aside
+        className={K.cls("drawer drawer-deep", open && "open")}
+        aria-hidden={!open}
+        role="dialog"
+        aria-label={`Edit resolver for ${target.entity_type}.${target.field_name}`}
+      >
+        <div className="drawer-head">
+          <span className="title">
+            resolver · {target.entity_type}.{target.field_name}
+          </span>
+          <button onClick={onClose} aria-label="Close">esc</button>
+        </div>
+        <div className="drawer-body">
+          <ResolverEditorForm
+            key={`${target.entity_type}.${target.field_name}`}
+            entityType={target.entity_type}
+            fieldName={target.field_name}
+            onApplied={onApplied}
+            onCancel={onClose}
+          />
+        </div>
+      </aside>
+    </React.Fragment>
+  );
+};
+
+// Result chip — the orange pill carrying the resolved value. Pill text is
+// hard-clamped to a single line with ellipsis so a long scalar (e.g. a
+// note subject) or an array preview can never blow out the column. When
+// the value is array-typed OR a string longer than ~28 chars, the pill
+// becomes clickable: click to open a popover that shows the full value
+// (arrays → one row per item; long scalars → wrapped+scrollable text).
+// Anchored below + right-aligned to the pill so it extends leftward into
+// the drawer body rather than overflowing the right rail.
+function ResultChip({ resultLabel, resultStatus, resultValue, innerRef }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  const isArray = Array.isArray(resultValue);
+  const arrayItems = isArray
+    ? resultValue.map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
+    : [];
+  const longScalar =
+    !isArray && typeof resultLabel === "string" && resultLabel.length > 28;
+  const isExpandable = isArray || longScalar;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      // Close just the popover; don't let lineage / drawer ESC fire too.
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  return (
+    <div className="flow-h2-result-wrap" ref={wrapRef}>
+      <div
+        ref={innerRef}
+        className={K.cls(
+          "flow-h2-result",
+          `status-${resultStatus}`,
+          isExpandable && "is-clickable",
+          open && "is-open"
+        )}
+        onClick={isExpandable ? () => setOpen((o) => !o) : undefined}
+        role={isExpandable ? "button" : undefined}
+        tabIndex={isExpandable ? 0 : undefined}
+        title={isExpandable ? "click to expand" : undefined}
+        onKeyDown={
+          isExpandable
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpen((o) => !o);
+                }
+              }
+            : undefined
+        }
+      >
+        <span className="flow-h2-result-value">
+          {isArray ? arrayItems[0] || "[empty]" : resultLabel}
+        </span>
+        {isArray && arrayItems.length > 1 && (
+          <span className="flow-h2-result-count">+{arrayItems.length - 1}</span>
+        )}
+      </div>
+      {open && (
+        <div
+          className="flow-h2-result-popover"
+          role="dialog"
+          aria-label="Full resolved value"
+        >
+          <div className="flow-h2-result-popover-head">
+            {isArray ? `${arrayItems.length} VALUES` : "VALUE"}
+          </div>
+          {isArray ? (
+            <ul className="flow-h2-result-popover-list">
+              {arrayItems.map((s, i) => (
+                <li key={i} className="flow-h2-result-popover-item">
+                  {s}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="flow-h2-result-popover-scalar">{resultLabel}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1767,12 +2084,13 @@ function LineageFlowLayout({
   resolverDetail,
   reason,
   resultLabel,
+  resultValue,
   resultStatus,
   entityType,
   fieldName,
-  onApplied,
+  onEditResolver,
+  onOpenDoc,
 }) {
-  const [editorOpen, setEditorOpen] = useState(false);
   const containerRef = useRef(null);
   const cardRefs = useRef([]);
   const resolverRef = useRef(null);
@@ -1851,15 +2169,34 @@ function LineageFlowLayout({
               : docId
                 ? `doc:${docId.slice(0, 8)}`
                 : lin?.written_by_agent_id || "(no source)";
+            const clickable = !!(docId && onOpenDoc);
             return (
               <div
                 key={i}
                 ref={(el) => (cardRefs.current[i] = el)}
-                className={K.cls("flow-h2-cand", winner && "is-winner")}
+                className={K.cls(
+                  "flow-h2-cand",
+                  winner && "is-winner",
+                  clickable && "is-clickable"
+                )}
                 style={{
                   borderColor: color.stroke,
                   background: color.fill,
                 }}
+                onClick={clickable ? () => onOpenDoc(docId) : undefined}
+                role={clickable ? "button" : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                title={clickable ? `open ${subLabel}` : undefined}
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onOpenDoc(docId);
+                        }
+                      }
+                    : undefined
+                }
               >
                 <span className="flow-h2-cand-icon">{meta ? meta.icon : "📄"}</span>
                 <span className="flow-h2-cand-text">
@@ -1884,45 +2221,36 @@ function LineageFlowLayout({
             className={K.cls(
               "flow-h2-resolver",
               isKnown ? "is-ok" : "is-warn",
-              entityType && fieldName && "is-clickable"
+              entityType && fieldName && onEditResolver && "is-clickable"
             )}
             onClick={() => {
-              if (entityType && fieldName) setEditorOpen((v) => !v);
+              if (entityType && fieldName && onEditResolver) {
+                onEditResolver({ entity_type: entityType, field_name: fieldName });
+              }
             }}
             title={
-              entityType && fieldName
-                ? `click to edit resolver for ${entityType}.${fieldName}`
-                : undefined
+              entityType && fieldName && onEditResolver
+                ? `click to edit resolver for ${entityType}.${fieldName} — ${resolverName}`
+                : resolverName
             }
           >
             <div className="flow-h2-resolver-title">RESOLVE</div>
-            <div className="flow-h2-resolver-sub">{resolverName}</div>
           </div>
+          <div className="flow-h2-resolver-name">{resolverName}</div>
           <div className="flow-h2-resolver-detail">{resolverDetail}</div>
           {reason && <div className="flow-h2-resolver-reason">{reason}</div>}
-          {editorOpen && entityType && fieldName && (
-            <ResolverEditor
-              entityType={entityType}
-              fieldName={fieldName}
-              onClose={() => setEditorOpen(false)}
-              onApplied={() => {
-                setEditorOpen(false);
-                onApplied?.();
-              }}
-            />
-          )}
         </div>
       </div>
 
       <div className="flow-h2-col flow-h2-col-result">
         <div className="flow-h2-col-label">RESULT</div>
         <div className="flow-h2-col-body">
-          <div
-            ref={resultRef}
-            className={K.cls("flow-h2-result", `status-${resultStatus}`)}
-          >
-            <span className="flow-h2-result-value">{resultLabel}</span>
-          </div>
+          <ResultChip
+            innerRef={resultRef}
+            resultLabel={resultLabel}
+            resultValue={resultValue}
+            resultStatus={resultStatus}
+          />
         </div>
       </div>
 
@@ -1940,14 +2268,24 @@ function LineageFlowLayout({
             const winner = isWinner(cands[i]);
             const opacity = winner || !isKnown ? 1 : 0.35;
             const d = pathD(p);
-            const valueText = K.fmtCandidateValue(cands[i].value);
-            // Anchor the value chip just outside the card on the card's
-            // vertical centerline — keeps every chip horizontally aligned
-            // and visually tied to its source row rather than the resolver.
-            const chipX = p.x1 + 44;
+            const chip = K.formatCandidateChip(cands[i].value);
+            // Anchor labels just outside the card and let them grow rightward
+            // toward the resolver pill. Truncate each line to fit the actual
+            // available width on this row (card-right + 12 → pill-left − 8)
+            // so the chip never bleeds through the resolver. 11px mono ≈
+            // 6.5px per glyph, so floor(width / 6.5) is the char budget.
+            const chipX = p.x1 + 12;
             const chipY = p.y1;
+            const availableWidth = Math.max(40, p.x2 - p.x1 - 20);
+            const maxChars = Math.max(4, Math.floor(availableWidth / 6.5));
+            const fittedLines = chip.lines.map((ln) =>
+              ln.length > maxChars ? ln.slice(0, Math.max(1, maxChars - 1)) + "…" : ln
+            );
+            const lineHeight = 13;
+            const startY = chipY - ((fittedLines.length - 1) * lineHeight) / 2;
             return (
               <g key={i} opacity={opacity}>
+                <title>{chip.full}</title>
                 <path
                   d={d}
                   fill="none"
@@ -1958,31 +2296,25 @@ function LineageFlowLayout({
                 <circle r={4} fill={color.stroke}>
                   <animateMotion dur="1.6s" repeatCount="indefinite" path={d} />
                 </circle>
-                <g transform={`translate(${chipX}, ${chipY})`}>
-                  <rect
-                    x={-32}
-                    y={-11}
-                    width={64}
-                    height={20}
-                    rx={5}
-                    ry={5}
-                    fill="#fff"
-                    stroke={color.stroke}
-                    strokeWidth={1.2}
-                  />
+                {fittedLines.map((ln, j) => (
                   <text
-                    x={0}
-                    y={3}
-                    textAnchor="middle"
+                    key={j}
+                    x={chipX}
+                    y={startY + j * lineHeight}
+                    textAnchor="start"
                     dominantBaseline="middle"
                     fontFamily="var(--mono)"
                     fontSize="11"
-                    fontWeight="700"
+                    fontWeight={j === 0 ? "700" : "500"}
                     fill={color.text}
+                    stroke="#fff"
+                    strokeWidth="3.5"
+                    strokeLinejoin="round"
+                    style={{ paintOrder: "stroke" }}
                   >
-                    {valueText}
+                    {ln}
                   </text>
-                </g>
+                ))}
               </g>
             );
           })}

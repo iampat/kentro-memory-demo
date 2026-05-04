@@ -219,23 +219,29 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 }
 .source-overlay-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 18px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
 }
 .source-overlay-head .title {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-2);
 }
 .source-overlay-head button {
   background: transparent; border: 1px solid var(--line);
-  padding: 2px 8px;
-  font-family: var(--mono); font-size: 11px;
+  padding: 6px 12px;
+  font-family: var(--mono); font-size: 13px;
+  letter-spacing: 0.04em;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
+  transition: background 120ms, border-color 120ms;
+}
+.source-overlay-head button:hover {
+  background: var(--bg-3);
+  border-color: var(--ink-3);
 }
 .source-overlay-body {
   flex: 1;
@@ -271,23 +277,24 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .entity-type-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: 4px 10px;
   font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink);
   background: var(--bg-3);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 .entity-key-text {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--ink-2);
   letter-spacing: 0.04em;
   text-transform: none;
+  font-weight: 500;
 }
 
 /* Entity overlay — global + per-agent comparison cards stacked vertically. */
@@ -1288,7 +1295,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .drawer {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: 520px;
+  width: 720px;
   background: linear-gradient(180deg, oklch(0.99 0.005 260), oklch(0.97 0.01 260));
   border-left: 1px solid var(--line);
   z-index: 101;
@@ -1310,6 +1317,53 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
  * over so any caller still passing `shifted` is harmless. */
 .drawer.shifted { right: 440px; z-index: 202; }
 .drawer.shifted.open { transform: translateX(0); }
+/* Deep slot — sits one drawer to the LEFT of LineageDrawer (which is pinned
+ * at right: 440px with width 720px), so its right edge meets the lineage
+ * drawer's left edge at viewport-1160. Used by SourceDrawer (when a
+ * candidate card is clicked) and ResolverDrawer (when the chip is clicked);
+ * those two are mutex with each other.
+ *
+ * Closed state quirk: a plain `translateX(100%)` only shifts the drawer by
+ * its own width — at right:1160 that leaves the closed drawer parked over
+ * the lineage drawer behind it, creating a ghost panel. Fix: drop z-index
+ * BELOW lineage (101) when closed so the slide-out animates *behind* the
+ * lineage drawer's opaque body. Z-index flips back to 102 the moment the
+ * .open class returns, so opening overlaps lineage. */
+.drawer.drawer-deep {
+  right: 1160px;
+  width: 380px;
+  /* Clamp left edge to the viewport: at 1440 the deep slot only has
+   * (1440 - 1160) = 280px of horizontal room before the left edge of the
+   * viewport, so a 380px drawer would clip 100px off the left. The
+   * max-width keeps an 8px gutter from the viewport edge regardless of
+   * the natural width below. The fallback `width` still applies on
+   * >=1548 viewports where the full width fits. */
+  max-width: calc(100vw - 1168px);
+  z-index: 100;
+}
+.drawer.drawer-deep.open {
+  transform: translateX(0);
+  z-index: 102;
+}
+/* SourceDrawer needs more horizontal room than the resolver form. */
+.drawer.drawer-deep.drawer-deep-wide {
+  width: 480px;
+  max-width: calc(100vw - 1168px);
+}
+/* Below ~1540px viewport width the deep slot can't host a usable drawer
+ * to the left of the lineage drawer. Collapse the deep slot into the
+ * lineage slot — the deep drawer overlays the lineage drawer (z-index 102
+ * when open already covers the lineage drawer at 101) instead of stacking
+ * to its left. The closed-state z-index trick from the base rule still
+ * keeps the closed deep drawer hidden behind lineage. */
+@media (max-width: 1539px) {
+  .drawer.drawer-deep,
+  .drawer.drawer-deep.drawer-deep-wide {
+    right: 440px;
+    width: 720px;
+    max-width: calc(100vw - 448px);
+  }
+}
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
@@ -2338,12 +2392,19 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   flex-direction: row;
   align-items: stretch;
   justify-content: space-between;
-  gap: 0;
-  padding: 22px 8px 14px;
+  gap: 28px;
+  padding: 32px 16px 24px;
+  min-height: 480px;
 }
-.flow-h2-col-cands { width: 180px; flex-shrink: 0; }
-.flow-h2-col-resolver { flex-shrink: 0; }
-.flow-h2-col-result { flex-shrink: 0; }
+.flow-h2-col-cands { width: 200px; flex-shrink: 0; }
+/* Resolver column is wide enough that the centered RESOLVE pill (~96px)
+ * leaves ~70-100px of clear horizontal space on each side. That space is
+ * where the SVG curve labels (candidate value previews) live; if the
+ * column is narrower they collide with the pill. */
+.flow-h2-col-resolver { width: 240px; flex-shrink: 0; }
+/* Result column absorbs the remaining horizontal space so a long resolved
+ * value can use it. min-width: 0 lets the pill's ellipsis kick in cleanly. */
+.flow-h2-col-result { flex: 1 1 auto; min-width: 120px; }
 .flow-h2-svg {
   position: absolute;
   inset: 0;
@@ -2371,12 +2432,15 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .flow-h2-col-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   flex: 1;
   justify-content: center;
 }
 .flow-h2-col-resolver .flow-h2-col-body { gap: 8px; align-items: center; }
-.flow-h2-col-result .flow-h2-col-body { align-items: flex-start; }
+/* `stretch` (the default) is critical — it lets .flow-h2-result-wrap fill
+ * the column width, which is what makes max-width: 100% on the pill resolve
+ * to the column width rather than to the pill's own content size. */
+.flow-h2-col-result .flow-h2-col-body { align-items: stretch; }
 
 /* Candidate card — names live here. Border + bg colors are inline-styled
  * from the per-source palette so each row reads as a distinct origin. */
@@ -2395,6 +2459,13 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 }
 .flow-h2-cand.is-winner {
   box-shadow: 0 0 0 1px currentColor, var(--shadow-sm);
+}
+.flow-h2-cand.is-clickable {
+  cursor: pointer;
+}
+.flow-h2-cand.is-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md, 0 4px 10px oklch(0.16 0.02 260 / 0.18));
 }
 .flow-h2-cand-icon {
   font-size: 14px;
@@ -2425,6 +2496,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   min-width: 0;
 }
 
+
 /* Resolver chip — dark pill in the middle column, matches the reference
  * exactly: bold "RESOLVE" title, lowercase resolver name as subtitle. */
 .flow-h2-resolver {
@@ -2454,6 +2526,21 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   color: oklch(0.85 0.01 260);
   letter-spacing: 0.04em;
 }
+/* Resolver name now lives outside the pill as a caption underneath, so the
+ * pill itself stays a compact ~80px "RESOLVE" chip. Keeping the name out
+ * of the pill is what gives the candidate→resolver curves enough
+ * horizontal room to host value labels. */
+.flow-h2-resolver-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: lowercase;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.3;
+}
 .flow-h2-resolver-detail {
   font-family: var(--mono);
   font-size: 10px;
@@ -2473,44 +2560,145 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   max-width: 160px;
 }
 
-/* Result chip — orange-tinted pill carrying the resolved value. */
+/* Result chip — orange-tinted pill carrying the resolved value. The pill
+ * is hard-clamped so a long string or array preview can never blow out
+ * the column; click reveals the full value in a popover anchored below. */
+.flow-h2-result-wrap {
+  position: relative;
+  display: block;
+  /* col-body's align-items:stretch makes this fill the column width. */
+}
 .flow-h2-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 14px;
   border-radius: 10px;
   background: oklch(0.65 0.18 35);
   color: oklch(0.99 0 0);
   box-shadow: var(--shadow-sm);
+  /* Adaptive: fill the column the wrap stretched into, capped at 520px so
+   * the pill stays sane on very wide layouts. The inner value span clamps
+   * with ellipsis to whatever's left after the optional count badge. */
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+  box-sizing: border-box;
+  transition: transform 120ms, filter 120ms;
 }
 .flow-h2-result.status-unresolved { background: oklch(0.55 0.05 260); }
+.flow-h2-result.is-clickable {
+  cursor: pointer;
+}
+.flow-h2-result.is-clickable:hover,
+.flow-h2-result.is-open {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 14px oklch(0.65 0.18 35 / 0.35);
+}
 .flow-h2-result-value {
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.flow-h2-result-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: oklch(1 0 0 / 0.22);
+  flex-shrink: 0;
+}
+
+/* Popover — anchored below the pill, right-aligned so it extends leftward
+ * into the drawer body rather than off the right edge. Scrollable when
+ * the array is long. */
+.flow-h2-result-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  max-height: 360px;
+  overflow-y: auto;
+  background: oklch(1 0 0);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px oklch(0.16 0.02 260 / 0.18);
+  padding: 10px;
+  z-index: 5;
+  font-family: var(--mono);
+}
+.flow-h2-result-popover-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--line-2);
+  margin-bottom: 8px;
+}
+.flow-h2-result-popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flow-h2-result-popover-item {
+  font-size: 12px;
+  padding: 6px 8px;
+  background: oklch(0.97 0.005 260);
+  border-radius: 6px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.flow-h2-result-popover-scalar {
+  font-size: 12px;
+  padding: 6px 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 /* ── EntityOverlay header: ACL chip + esc, side-by-side ──────────────────── */
 .entity-overlay-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-.entity-overlay-acl-chip {
+.source-overlay-head button.entity-overlay-acl-chip {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--accent);
-  background: var(--accent-glow);
-  color: var(--accent);
-  cursor: pointer;
-  transition: background 120ms, color 120ms;
-}
-.entity-overlay-acl-chip:hover {
+  letter-spacing: 0.08em;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1.5px solid var(--accent);
   background: var(--accent);
   color: oklch(0.99 0 0);
+  cursor: pointer;
+  box-shadow: 0 1px 3px oklch(0.16 0.02 260 / 0.18);
+  transition: background 120ms, transform 120ms, box-shadow 120ms;
+}
+.source-overlay-head button.entity-overlay-acl-chip:hover {
+  background: oklch(from var(--accent) calc(l - 0.04) c h);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px oklch(0.16 0.02 260 / 0.24);
+}
+.source-overlay-head button.entity-overlay-acl-chip:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px oklch(0.16 0.02 260 / 0.18);
 }
 
 /* ── PolicyOverlay — type-scoped Access matrix + Rules + NL editor ──────────
@@ -2597,41 +2785,13 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   box-shadow: 0 4px 12px oklch(0.16 0.02 260 / 0.18);
 }
 
-/* Inline resolver editor — appears under the RESOLVER chip when clicked. */
-.resolver-editor {
-  margin-top: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-2);
+/* Resolver editor form — hosted by ResolverDrawer (the drawer chrome
+ * supplies the title/close button), so the form itself is plain content. */
+.resolver-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: 100%;
+  gap: 12px;
 }
-.resolver-editor-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.resolver-editor-title {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-}
-.resolver-editor-close {
-  background: transparent;
-  border: none;
-  color: var(--ink-3);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-}
-.resolver-editor-close:hover { color: var(--ink); }
 .resolver-editor-row {
   display: flex;
   flex-direction: column;
@@ -2688,4 +2848,63 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   background: transparent;
   color: var(--ink-2);
   border: 1px solid var(--line);
+}
+.resolver-form-loading {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 6px 2px;
+}
+.resolver-editor-legacy {
+  border: 1px solid oklch(0.85 0.08 75);
+  background: oklch(0.985 0.025 80);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.resolver-editor-legacy-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: oklch(0.45 0.13 70);
+}
+.resolver-editor-legacy-body {
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+.resolver-editor-legacy-body code,
+.resolver-editor-migrate-note code {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  background: oklch(0.95 0.04 80);
+  border-radius: 4px;
+}
+.resolver-editor-legacy-pre {
+  font-family: var(--mono);
+  font-size: 11px;
+  margin: 0;
+  padding: 8px 10px;
+  background: oklch(0.99 0.005 260);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  color: var(--ink-2);
+}
+.resolver-editor-migrate-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 8px;
+  background: oklch(0.97 0.02 80);
+  border: 1px dashed oklch(0.82 0.08 75);
+  border-radius: 6px;
 }

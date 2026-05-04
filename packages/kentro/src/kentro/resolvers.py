@@ -11,7 +11,6 @@ runs server-side; the SDK serializes the spec into the wire request via `.to_spe
 from kentro.types import (
     AutoResolverSpec,
     LatestWriteResolverSpec,
-    PreferAgentResolverSpec,
     RawResolverSpec,
     ResolverSpec,
     SkillResolverSpec,
@@ -42,16 +41,6 @@ class LatestWriteResolver(Resolver):
 
     def to_spec(self) -> LatestWriteResolverSpec:
         return LatestWriteResolverSpec()
-
-
-class PreferAgent(Resolver):
-    """Prefer writes from `agent_id`; latest of those wins. UNRESOLVED if no match."""
-
-    def __init__(self, agent_id: str) -> None:
-        self.agent_id = agent_id
-
-    def to_spec(self) -> PreferAgentResolverSpec:
-        return PreferAgentResolverSpec(agent_id=self.agent_id)
 
 
 class SkillResolver(Resolver):
@@ -87,7 +76,6 @@ class AutoResolver(Resolver):
 __all__ = [
     "AutoResolver",
     "LatestWriteResolver",
-    "PreferAgent",
     "RawResolver",
     "Resolver",
     "SkillResolver",

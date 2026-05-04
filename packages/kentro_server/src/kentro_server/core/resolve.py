@@ -24,7 +24,6 @@ from kentro.types import (
     AutoResolverSpec,
     FieldStatus,
     LatestWriteResolverSpec,
-    PreferAgentResolverSpec,
     RawResolverSpec,
     ResolverPolicySet,
     ResolverSpec,
@@ -37,7 +36,6 @@ from kentro_server.store.models import FieldWriteRow
 logger = logging.getLogger(__name__)
 
 _RAW_REASON = "raw resolver requested — caller wants both candidates"
-_PREFER_AGENT_NO_MATCH = "no candidate written by the preferred agent"
 _AUTO_FALLBACK_DEFAULT: LatestWriteResolverSpec = LatestWriteResolverSpec()
 
 
@@ -114,25 +112,6 @@ def resolve(
 
     if isinstance(spec, LatestWriteResolverSpec):
         winner = max(candidates, key=lambda c: c.written_at)
-        return ResolvedFieldValue(
-            status=FieldStatus.KNOWN,
-            winner=winner,
-            candidates=tuple(candidates),
-            reason=None,
-            resolver_used=spec,
-        )
-
-    if isinstance(spec, PreferAgentResolverSpec):
-        matches = [c for c in candidates if c.written_by_agent_id == spec.agent_id]
-        if not matches:
-            return ResolvedFieldValue(
-                status=FieldStatus.UNRESOLVED,
-                winner=None,
-                candidates=tuple(candidates),
-                reason=f"{_PREFER_AGENT_NO_MATCH} ({spec.agent_id!r})",
-                resolver_used=spec,
-            )
-        winner = max(matches, key=lambda c: c.written_at)
         return ResolvedFieldValue(
             status=FieldStatus.KNOWN,
             winner=winner,

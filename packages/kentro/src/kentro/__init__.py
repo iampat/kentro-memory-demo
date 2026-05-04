@@ -30,7 +30,6 @@ from kentro.client import (
 from kentro.resolvers import (
     AutoResolver,
     LatestWriteResolver,
-    PreferAgent,
     RawResolver,
     Resolver,
     SkillResolver,
@@ -121,7 +120,6 @@ __all__ = [
     "NLIntent",
     "NLResponse",
     "NotFoundError",
-    "PreferAgent",
     "RawResolver",
     "ReevaluationReport",
     "Resolver",

@@ -14,7 +14,6 @@ from kentro.types import (
     EntityVisibilityRule,
     FieldReadRule,
     LatestWriteResolverSpec,
-    PreferAgentResolverSpec,
     RawResolverSpec,
     ResolverPolicy,
     RuleSet,
@@ -146,18 +145,6 @@ def test_render_resolver_policy_skill() -> None:
         raise AssertionError(f"unexpected render: {out!r}")
     if not out.startswith("[skill]"):
         raise AssertionError(f"expected [skill] prefix, got {out!r}")
-
-
-def test_render_resolver_policy_prefer_agent() -> None:
-    out = render_resolver_policy(
-        ResolverPolicy(
-            entity_type="Customer",
-            field_name="deal_size",
-            resolver=PreferAgentResolverSpec(agent_id="ingestion_agent"),
-        )
-    )
-    if not out.startswith("[prefer]"):
-        raise AssertionError(f"unexpected render: {out!r}")
 
 
 def test_render_resolver_policy_latest_write() -> None:
