@@ -317,7 +317,11 @@ Bundles the deferred codex 3-finding fix (since Stage A immediately starts depen
 
 **Verification:** new endpoints have unit tests; `task reset-and-seed` produces a tenant with 4 entity types registered + 4 docs ingested + 4 ACL rules applied; alembic upgrade against an existing pre-PR-#18 DB succeeds; demo-key boot guard refuses by default and accepts with `KENTRO_ALLOW_DEMO_KEYS=true`.
 
-#### PR 10-2 — Stage A (wire reads + agent-auth foundation)
+#### PR 10-2 — Stage A (wire reads + agent-auth foundation) — **DONE**
+
+**Built:** `static/api.js` (`window.K.api` with `bootstrap`/`setActingAs`/reads), `static/agent-switcher.jsx` (header dropdown + bootstrap state dot), `static/app.jsx` rewritten (3-column live view: documents/entities/rules + per-agent EntityDrawer with status pills and lineage). Race-condition gate (`ready` flag) ensures panels don't fire before bootstrap caches the bearer tokens. Two server-side bug fixes: `_auto_dispatch` defends against `ConflictRule(resolver=AutoResolverSpec())` self-reference; demo-ruleset trimmed of meaningless `AutoResolverSpec` ConflictRule (30 → 29 rules). Taskfile `reset-and-seed` uses `bash -c` so `$!` captures the real PID. `index.html` stops loading `panels.jsx`/`tweaks-panel.jsx` (those depended on KENTRO_DATA). **End-to-end verified via Chrome MCP** with all 3 agents: Sales → CS swap re-renders entity lists per ACL; Acme Corp drawer shows `deal_size`/`sales_notes` as HIDDEN for CS but KNOWN for Sales.
+
+#### PR 10-2 — original scope outline (kept for reference)
 
 - `static/api.js` (new): `window.K.api` with `setActingAs(agent)`, `getCurrentAgent()`, `listDocuments()`, `readEntity(type, key)`, `listEntities(type)`, `getRules()`, `listSchema()`, `_fetch(path, opts)` that injects the right bearer token (agent for reads, admin for admin-only paths).
 - Header agent switcher: dropdown showing the three agents with their ACL profile in micro-text.

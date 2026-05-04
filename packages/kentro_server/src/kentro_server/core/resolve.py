@@ -17,6 +17,7 @@ SkillResolverDecision in skills/llm_client.py for the schema. Lands the
 "Deferred to the very end".
 """
 
+import logging
 from dataclasses import dataclass
 
 from kentro.types import (
@@ -33,6 +34,8 @@ from kentro.types import (
 
 from kentro_server.skills.llm_client import LLMClient
 from kentro_server.store.models import FieldWriteRow
+
+logger = logging.getLogger(__name__)
 
 _RAW_REASON = "raw resolver requested — caller wants both candidates"
 _PREFER_AGENT_NO_MATCH = "no candidate written by the preferred agent"
@@ -175,13 +178,28 @@ def _auto_dispatch(
     entity_type: str,
     field_name: str,
 ) -> ResolverSpec:
-    """Find the active `ConflictRule` for (entity, field); fall back to LatestWrite."""
+    """Find the active `ConflictRule` for (entity, field); fall back to LatestWrite.
+
+    Defensive: a `ConflictRule(resolver=AutoResolverSpec())` would cause an
+    infinite dispatch loop and ultimately fall through to a TypeError in the
+    outer `resolve()`. Treat that case as "no rule" and use the fallback —
+    AutoResolver inside ConflictRule is meaningless (auto already IS the read
+    path's default). Future v0.1 should reject this at apply time.
+    """
     for rule in ruleset.rules:
         if (
             isinstance(rule, ConflictRule)
             and rule.entity_type == entity_type
             and rule.field_name == field_name
         ):
+            if isinstance(rule.resolver, AutoResolverSpec):
+                logger.warning(
+                    "ConflictRule for %s.%s wraps AutoResolverSpec — using fallback %s",
+                    entity_type,
+                    field_name,
+                    type(_AUTO_FALLBACK_DEFAULT).__name__,
+                )
+                return _AUTO_FALLBACK_DEFAULT
             return rule.resolver
     return _AUTO_FALLBACK_DEFAULT
 

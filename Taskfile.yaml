@@ -66,8 +66,9 @@ tasks:
       - task: reset
       # Background the server, wait for /healthz, then migrate + seed.
       - |
-        KENTRO_ALLOW_DEMO_KEYS=true KENTRO_STATE_DIR={{.STATE_DIR}} nohup uv run uvicorn kentro_server.main:app --host {{.HOST}} --port {{.PORT}} > .kentro-dev-server.log 2>&1 &
-        echo $! > .kentro-dev-server.pid
+        # bash subshell so $! captures the right PID (zsh + Taskfile's `set -e`
+        # quoting can mangle it under POSIX `sh`).
+        bash -c 'KENTRO_ALLOW_DEMO_KEYS=true KENTRO_STATE_DIR={{.STATE_DIR}} nohup uv run uvicorn kentro_server.main:app --host {{.HOST}} --port {{.PORT}} > .kentro-dev-server.log 2>&1 & echo $! > .kentro-dev-server.pid'
         until curl -fsS http://{{.HOST}}:{{.PORT}}/healthz > /dev/null 2>&1; do sleep 0.5; done
         echo "server up — pid=$(cat .kentro-dev-server.pid)"
       # Migrate is idempotent and the server already auto-migrated on first
