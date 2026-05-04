@@ -91,11 +91,11 @@ tasks:
         fi
 
   reset:
-    desc: Wipe local server state (DBs, tenants.json, llm cache, dev-server pid)
+    desc: Wipe local server state (DBs, llm cache, dev-server pid). Preserves tenants.json.
     cmds:
       - task: reset-and-seed:stop
       - rm -rf {{.STATE_DIR}}
-      - rm -f tenants.json .kentro-dev-server.pid .kentro-dev-server.log
+      - rm -f .kentro-dev-server.pid .kentro-dev-server.log
 
   # ── quality gates ───────────────────────────────────────────────────────────
 

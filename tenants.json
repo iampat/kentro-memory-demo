@@ -1,24 +1,26 @@
 {
   "tenants": [
     {
-      "id": "local",
-      "display_name": "Local Dev",
+      "id": "webui-demo-tenant",
+      "display_name": "Web UI Demo",
       "agents": [
         {
           "id": "ingestion_agent",
-          "display_name": "Ingestion Agent",
           "api_key": "local-ingestion-do-not-share",
+          "display_name": "Ingestion Agent",
           "is_admin": true
         },
         {
           "id": "sales",
+          "api_key": "local-sales-do-not-share",
           "display_name": "Sales Agent",
-          "api_key": "local-sales-do-not-share"
+          "is_admin": false
         },
         {
           "id": "customer_service",
+          "api_key": "local-cs-do-not-share",
           "display_name": "Customer Service Agent",
-          "api_key": "local-cs-do-not-share"
+          "is_admin": false
         }
       ]
     }

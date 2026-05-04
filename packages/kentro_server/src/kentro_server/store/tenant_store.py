@@ -31,36 +31,11 @@ from sqlmodel import Session, create_engine
 from kentro_server.store import models  # noqa: F401
 from kentro_server.store.blobs import FilesystemBlobStore
 from kentro_server.store.migrations import upgrade_to_head
-from kentro_server.store.tenant_config import AgentConfig, TenantConfig, TenantsConfig
+from kentro_server.store.tenant_config import AgentConfig, TenantsConfig
 
 logger = logging.getLogger(__name__)
 
 TENANT_ID_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
-DEFAULT_LOCAL_TENANT = TenantConfig(
-    id="local",
-    display_name="Local Dev",
-    agents=(
-        # ingestion_agent is admin so the demo's seed flow can register schemas
-        # and apply rules. sales / customer_service are non-admin so the
-        # Sales-vs-CS access boundary is real (they cannot re-grant themselves).
-        AgentConfig(
-            id="ingestion_agent",
-            api_key="local-ingestion-do-not-share",
-            display_name="Ingestion Agent",
-            is_admin=True,
-        ),
-        AgentConfig(
-            id="sales",
-            api_key="local-sales-do-not-share",
-            display_name="Sales Agent",
-        ),
-        AgentConfig(
-            id="customer_service",
-            api_key="local-cs-do-not-share",
-            display_name="Customer Service Agent",
-        ),
-    ),
-)
 
 
 def _validate_tenant_id(tenant_id: str, root_dir: Path) -> Path:
@@ -138,21 +113,27 @@ class TenantRegistry:
 
     @classmethod
     def from_paths(cls, *, state_dir: Path, config_path: Path) -> Self:
-        """Load tenants from `config_path`, auto-creating a default if absent.
+        """Load tenants from `config_path`. `tenants.json` is the only source of truth.
 
         `config_path` is intentionally separate from `state_dir`: the tenants file is
         a config artifact (tracked in git), while per-tenant subdirectories under
         `state_dir` are runtime state (gitignored).
+
+        If `config_path` is missing, write an empty `TenantsConfig` and refuse to
+        boot — there is no hardcoded default in code, so the operator must
+        populate `tenants.json` themselves before any auth works.
         """
+        state_dir.mkdir(parents=True, exist_ok=True)
         if not config_path.exists():
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            default = TenantsConfig(tenants=(DEFAULT_LOCAL_TENANT,))
-            config_path.write_text(default.model_dump_json(indent=2) + "\n")
-            logger.info(
-                "created default tenants.json at %s with one 'local' tenant + 3 agents",
+            empty = TenantsConfig(tenants=())
+            config_path.write_text(empty.model_dump_json(indent=2) + "\n")
+            logger.warning(
+                "no tenants.json found; wrote empty %s — populate it with at least "
+                "one tenant + admin agent before any authenticated request will work",
                 config_path,
             )
-            config = default
+            config = empty
         else:
             data = json.loads(config_path.read_text())
             config = TenantsConfig.model_validate(data)

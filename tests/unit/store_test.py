@@ -221,7 +221,11 @@ def test_blob_store_rejects_absolute_key(registry: TenantRegistry) -> None:
         store.blobs.put("/etc/passwd", b"x")
 
 
-def test_from_paths_creates_default_when_missing(tmp_path: Path) -> None:
+def test_from_paths_creates_empty_config_when_missing(tmp_path: Path) -> None:
+    """When `tenants.json` is missing, write an empty config (no hardcoded default
+    tenant in code) and boot with zero tenants. The operator must populate the
+    file before any authenticated request will work.
+    """
     config_path = tmp_path / "tenants.json"
     state_dir = tmp_path / "kentro_state"
     if config_path.exists():
@@ -230,10 +234,12 @@ def test_from_paths_creates_default_when_missing(tmp_path: Path) -> None:
     registry = TenantRegistry.from_paths(state_dir=state_dir, config_path=config_path)
 
     if not config_path.exists():
-        raise AssertionError("from_paths must create tenants.json on first run")
-    if "local" not in registry.known_tenants():
-        raise AssertionError(f"default tenant 'local' missing: {registry.known_tenants()}")
-    # Re-load from the same file: tenants persist.
+        raise AssertionError("from_paths must write an empty tenants.json on first run")
+    if registry.known_tenants() != []:
+        raise AssertionError(
+            f"expected zero tenants from empty config, got {registry.known_tenants()}"
+        )
+    # Re-load from the same file: still empty, no surprise default appearing.
     registry2 = TenantRegistry.from_paths(state_dir=state_dir, config_path=config_path)
-    if registry2.known_tenants() != ["local"]:
-        raise AssertionError(f"tenants didn't persist: {registry2.known_tenants()}")
+    if registry2.known_tenants() != []:
+        raise AssertionError(f"empty config didn't persist: {registry2.known_tenants()}")

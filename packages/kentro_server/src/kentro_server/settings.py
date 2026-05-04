@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     kentro_llm_cache_enabled: bool = True
 
     # --- On-disk state root (default: kentro.toml) ---
-    kentro_state_dir: Path = Path("./kentro_state")
+    kentro_state_dir: Path = Path("./.kentro_state")
 
     # --- Tenants config file (default: kentro.toml) ---
     kentro_tenants_json: Path = Path("./tenants.json")

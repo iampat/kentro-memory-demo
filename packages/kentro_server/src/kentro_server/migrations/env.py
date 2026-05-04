@@ -8,7 +8,7 @@ runs the same upgrade/downgrade against each.
 Two modes:
 
 1. **CLI iteration mode (default).** `alembic upgrade head` with no overrides
-   reads `KENTRO_STATE_DIR` (default `kentro_state`), discovers every
+   reads `KENTRO_STATE_DIR` (default `.kentro_state`), discovers every
    `<state_dir>/<tenant>/state.sqlite`, and runs migrations against each.
    `task migrate` wraps this.
 
@@ -49,7 +49,7 @@ def _discover_tenant_db_urls() -> list[str]:
     Empty result is legal — first-boot before any tenant DB exists. Caller
     treats this as "nothing to migrate" rather than an error.
     """
-    state_dir_str = os.environ.get("KENTRO_STATE_DIR", "kentro_state")
+    state_dir_str = os.environ.get("KENTRO_STATE_DIR", ".kentro_state")
     state_dir = Path(state_dir_str).resolve()
     if not state_dir.is_dir():
         return []
