@@ -46,7 +46,7 @@ from kentro_server.api.auth import Principal
 from kentro_server.core.read import read_entity
 from kentro_server.core.rules import apply_ruleset, load_active_ruleset
 from kentro_server.core.schema_registry import SchemaRegistry
-from kentro_server.core.write import write_field
+from kentro_server.core.write import write_field, write_fields_bulk
 from kentro_server.extraction import ingest_document
 from kentro_server.skills.llm_client import LLMClient
 from kentro_server.skills.nl_to_ruleset import parse_nl_to_ruleset
@@ -228,33 +228,34 @@ def _register_tools(mcp: FastMCP) -> None:
                 "entity_key": subject,
                 "reason": acl.reason,
             }
-        # Populate `subject` mirroring the HTTP route — see routes/memory.py
-        # for rationale (avoids reads always showing Note.subject as UNKNOWN).
-        fields = {
-            "subject": json.dumps(subject),
-            "predicate": json.dumps(predicate),
+        # Atomic multi-field write — mirrors routes/memory.py::remember exactly.
+        # Codex 2026-05-03 high finding: per-field commits could leave a half-
+        # written Note when a per-field deny landed mid-loop. `write_fields_bulk`
+        # pre-validates ACL across all fields and writes inside one transaction.
+        fields: list[tuple[str, str, float | None]] = [
+            ("subject", json.dumps(subject), confidence),
+            ("predicate", json.dumps(predicate), confidence),
             # Single dumps: persists canonical JSON; one decode on read returns
             # the original value. The previous double-dumps left object_json as
             # an opaque string on read.
-            "object_json": json.dumps(object_value),
-        }
+            ("object_json", json.dumps(object_value), confidence),
+        ]
         if source_label is not None:
-            fields["source_label"] = json.dumps(source_label)
-        last = None
-        for fname, vjson in fields.items():
-            last = write_field(
-                store=ctx.principal.store,
-                schema=schema,
-                agent_id=ctx.principal.agent_id,
-                entity_type="Note",
-                entity_key=subject,
-                field_name=fname,
-                value_json=vjson,
-                confidence=confidence,
-            )
-            if last.status == WriteStatus.PERMISSION_DENIED:
-                break
-        return last.model_dump(mode="json") if last is not None else {}
+            fields.append(("source_label", json.dumps(source_label), confidence))
+        results = write_fields_bulk(
+            store=ctx.principal.store,
+            schema=schema,
+            agent_id=ctx.principal.agent_id,
+            entity_type="Note",
+            entity_key=subject,
+            fields=fields,
+        )
+        # Mirror routes/memory.py::remember: return first PD (with the meaningful
+        # reason) when present; otherwise the last result.
+        for r in results:
+            if r.status == WriteStatus.PERMISSION_DENIED:
+                return r.model_dump(mode="json")
+        return results[-1].model_dump(mode="json") if results else {}
 
     @mcp.tool(description="Read an entity by (type, key) using the default AutoResolver.")
     def kentro_read(entity_type: str, entity_key: str) -> dict:

@@ -1,25 +1,42 @@
 """MCP server smoke tests — auth middleware + tool registration.
 
-Two layers covered:
+Layers covered:
 1. **Auth middleware** (`kentro_server.mcp_server.AuthMiddleware`) — drives the
    ASGI app directly with synthetic scopes/messages and asserts unauthenticated
    requests get 401 *before* the inner app is invoked.
 2. **Tool registration** — `build_mcp()` returns a `FastMCP` whose `list_tools()`
    includes every kentro_* tool we wired.
+3. **Atomic remember** (Codex 2026-05-03 finding #2) — exercises `kentro_remember`
+   with a per-field deny rule active and asserts no partial Note state lands.
 
 We do not boot a full MCP client session here — that's an integration concern
 and adds a lot of moving parts (session manager, streaming protocol). The tests
-above cover the surfaces most likely to break: auth and tool registration.
+above cover the surfaces most likely to break: auth, tool registration, and
+the remember-atomicity invariant.
 """
 
 import pytest
-from kentro_server.mcp_server import AuthMiddleware, build_mcp
+from kentro.types import (
+    EntityVisibilityRule,
+    FieldReadRule,
+    WriteRule,
+)
+from kentro_server.core.rules import apply_ruleset
+from kentro_server.core.schema_registry import SchemaRegistry
+from kentro_server.mcp_server import (
+    AuthMiddleware,
+    McpRequestContext,
+    _ctx,
+    build_mcp,
+)
 from kentro_server.store import (
     AgentConfig,
     TenantConfig,
     TenantRegistry,
     TenantsConfig,
 )
+
+from tests.unit._helpers import FakeLLM
 
 _API_KEY = "mcp-test-key"
 
@@ -180,3 +197,119 @@ async def test_auth_middleware_passes_through_lifespan_scope(registry: TenantReg
     await mw({"type": "lifespan"}, receive, send)
     if not inner.called:
         raise AssertionError("lifespan scope must reach the inner app unauthenticated")
+
+
+# === Atomic remember (finding #2) ===================================================
+
+
+@pytest.mark.asyncio
+async def test_kentro_remember_atomic_no_partial_writes_on_field_denial(
+    registry: TenantRegistry,
+) -> None:
+    """Codex 2026-05-03 finding #2: MCP `kentro_remember` must be atomic.
+
+    Mirrors `test_remember_atomic_no_partial_writes_on_field_denial` from
+    `api_smoke_test.py`. Setup: grant write on Note, but explicitly deny
+    write on Note.object_json. The previous per-field loop persisted
+    subject + predicate then PD'd on object_json; the bulk path short-
+    circuits up-front, so zero writes land.
+    """
+    store, agent_id, _ = registry.by_api_key(_API_KEY)
+    schema = SchemaRegistry(store)
+    schema.list_all()  # auto-seed Note
+
+    apply_ruleset(
+        store,
+        rules=(
+            EntityVisibilityRule(agent_id=agent_id, entity_type="Note", allowed=True),
+            WriteRule(agent_id=agent_id, entity_type="Note", allowed=True),
+            WriteRule(
+                agent_id=agent_id,
+                entity_type="Note",
+                field_name="object_json",
+                allowed=False,
+            ),
+            FieldReadRule(
+                agent_id=agent_id, entity_type="Note", field_name="subject", allowed=True
+            ),
+            FieldReadRule(
+                agent_id=agent_id, entity_type="Note", field_name="predicate", allowed=True
+            ),
+            FieldReadRule(
+                agent_id=agent_id, entity_type="Note", field_name="object_json", allowed=True
+            ),
+        ),
+    )
+
+    mcp = build_mcp()
+    fake_llm = FakeLLM()
+
+    # Set the per-request contextvar by hand — this is what AuthMiddleware
+    # does for real requests. We bypass the middleware to keep the test
+    # focused on tool behavior.
+    from kentro_server.api.auth import Principal  # noqa: PLC0415 — test-local
+
+    principal = Principal(tenant_id=store.tenant_id, agent_id=agent_id, store=store, is_admin=True)
+    ctx = McpRequestContext(
+        principal=principal, llm=fake_llm, registry=registry, smart_model="claude-sonnet-4-6"
+    )
+    token = _ctx.set(ctx)
+    try:
+        result = await mcp.call_tool(
+            "kentro_remember",
+            {
+                "subject": "demo-prep",
+                "predicate": "scheduled_at",
+                "object_value": "2026-05-10T14:00:00Z",
+                "source_label": "kentro-cli",
+            },
+        )
+    finally:
+        _ctx.reset(token)
+
+    # FastMCP returns either (content_blocks, structured_payload),
+    # a structured dict, or a list of TextContent blocks. Normalize to a
+    # dict so the assertions are uniform.
+    import json  # noqa: PLC0415 — test-local
+
+    from mcp.types import TextContent  # noqa: PLC0415
+
+    raw_payload: object
+    if isinstance(result, tuple):
+        raw_payload = result[1]
+    elif isinstance(result, list) and result:
+        first = result[0]
+        if not isinstance(first, TextContent):
+            raise AssertionError(f"expected TextContent block, got {type(first).__name__}")
+        # Each block carries the JSON-encoded tool return value as `.text`.
+        raw_payload = json.loads(first.text)
+    else:
+        raw_payload = result
+    if not isinstance(raw_payload, dict):
+        raise AssertionError(f"unexpected MCP payload shape: {raw_payload!r}")
+    payload: dict[str, object] = {str(k): v for k, v in raw_payload.items()}
+    if payload.get("status") != "permission_denied":
+        raise AssertionError(
+            f"expected permission_denied (object_json deny gate), got {payload!r}"
+        )
+
+    # The crucial invariant: NO Note rows or field writes should exist for the
+    # subject. A leaky per-field loop would have written subject + predicate.
+    from kentro_server.store.models import EntityRow, FieldWriteRow  # noqa: PLC0415
+    from sqlmodel import select  # noqa: PLC0415 — test-local
+
+    with store.session() as session:
+        entity = session.exec(
+            select(EntityRow).where(EntityRow.type == "Note", EntityRow.key == "demo-prep")
+        ).first()
+        if entity is not None:
+            writes = list(
+                session.exec(
+                    select(FieldWriteRow).where(FieldWriteRow.entity_id == entity.id)
+                ).all()
+            )
+            if writes:
+                raise AssertionError(
+                    f"expected zero field writes after atomic-deny, got {len(writes)}: "
+                    f"{[(w.field_name, w.value_json) for w in writes]!r}"
+                )

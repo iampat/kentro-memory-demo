@@ -8,6 +8,7 @@ back as `FieldValue(status=UNKNOWN)`.
 The function is pure-Python (no FastAPI). The HTTP route is a thin wrapper.
 """
 
+import hashlib
 import json
 import logging
 
@@ -21,15 +22,26 @@ from kentro.types import (
     ResolverSpec,
     RuleSet,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from kentro_server.core.events import Event, EventBus
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.core.write import write_field
-from kentro_server.skills.llm_client import LLMClient, NotifyAction, WriteEntityAction
+from kentro_server.skills.llm_client import (
+    LLMClient,
+    NotifyAction,
+    SkillAction,
+    WriteEntityAction,
+)
 from kentro_server.store import TenantStore
-from kentro_server.store.models import EntityRow, FieldWriteRow
+from kentro_server.store.models import (
+    ConflictRow,
+    EntityRow,
+    FieldWriteRow,
+    SkillActionExecutionRow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,16 +161,61 @@ def read_entity(
         # PR 10-5: workflow-aware Skills. If the resolver decision carried
         # actions, execute each through the same governance gate as a regular
         # write/read. Skills cannot bypass ACL — `write_field()` re-evaluates.
-        if resolved.actions:
+        # Codex 2026-05-03 finding #1: dedupe via SkillActionExecutionRow so
+        # a refreshed/retried read does not replay the same action.
+        if resolved.actions and entity_row is not None:
+            scope_key = _scope_key_for_decision(
+                store=store,
+                entity_id=entity_row.id,
+                field_name=field_name,
+                candidates=candidates,
+                winner=resolved.winner,
+            )
             _execute_actions(
                 actions=resolved.actions,
                 store=store,
                 schema=schema,
                 acting_agent_id=agent_id,
                 event_bus=event_bus,
+                scope_key=scope_key,
             )
 
     return EntityRecord(entity_type=entity_type, key=entity_key, fields=fields)
+
+
+def _scope_key_for_decision(
+    *,
+    store: TenantStore,
+    entity_id,
+    field_name: str,
+    candidates: list[FieldWriteRow],
+    winner: FieldWriteRow | None,
+) -> str:
+    """Build the dedupe scope_key for a resolver decision.
+
+    When >=2 distinct candidate values exist, a `ConflictRow` was opened on
+    the write path; we key off its UUID. Otherwise (single-candidate
+    corroboration / SkillResolver invented an answer over agreeing writes)
+    we key off the winner's field-write UUID. Both cases produce a stable
+    identifier across retries — re-running the same read maps to the same
+    scope_key, so the UNIQUE(scope_key, action_fingerprint) blocks replays.
+    """
+    distinct_values = {c.value_json for c in candidates}
+    if len(distinct_values) >= 2:
+        with store.session() as session:
+            conflict = session.exec(
+                select(ConflictRow).where(
+                    ConflictRow.entity_id == entity_id,
+                    ConflictRow.field_name == field_name,
+                    col(ConflictRow.resolved_at).is_(None),
+                )
+            ).first()
+            if conflict is not None:
+                return f"conflict:{conflict.id}"
+    # Fallback: single-candidate or no conflict row found — key off the
+    # winning write id (or the latest candidate when winner is missing).
+    fallback_write = winner or max(candidates, key=lambda c: c.written_at)
+    return f"write:{fallback_write.id}"
 
 
 def _execute_actions(
@@ -168,6 +225,7 @@ def _execute_actions(
     schema: SchemaRegistry,
     acting_agent_id: str,
     event_bus: EventBus | None,
+    scope_key: str,
 ) -> None:
     """Walk SkillResolverDecision.actions; execute each through the ACL gate.
 
@@ -175,46 +233,164 @@ def _execute_actions(
     A WriteEntityAction calls `write_field` directly (which re-evaluates ACL
     for the acting agent — no escape hatch). A NotifyAction publishes onto
     the EventBus when one is wired; logs only when not.
+
+    Codex 2026-05-03 finding #1: each action is fingerprinted and gated by
+    `SkillActionExecutionRow`. If a row already exists for
+    `(scope_key, action_fingerprint)`, the action is skipped. After a
+    successful execution we insert the row; the UNIQUE constraint guards
+    against a concurrent racer.
     """
     for action in actions:
-        if isinstance(action, WriteEntityAction):
-            try:
-                result = write_field(
+        fingerprint = _action_fingerprint(action)
+        if _already_executed(store, scope_key=scope_key, fingerprint=fingerprint):
+            logger.info(
+                "skill action: dedupe-skip scope=%s fingerprint=%s action=%s",
+                scope_key,
+                fingerprint[:12],
+                type(action).__name__,
+            )
+            continue
+        match action:
+            case WriteEntityAction():
+                _execute_write_entity(
+                    action=action,
                     store=store,
                     schema=schema,
-                    agent_id=acting_agent_id,
-                    entity_type=action.entity_type,
-                    entity_key=action.entity_key,
-                    field_name=action.field_name,
-                    value_json=action.value_json,
+                    acting_agent_id=acting_agent_id,
                 )
-                logger.info(
-                    "skill action: WriteEntity %s/%s.%s → %s",
-                    action.entity_type,
-                    action.entity_key,
-                    action.field_name,
-                    result.status.value,
+            case NotifyAction():
+                _execute_notify(action=action, store=store, event_bus=event_bus)
+            case _:
+                logger.warning("skill action: unknown type %s — dropping", type(action).__name__)
+                continue
+        _record_execution(
+            store,
+            scope_key=scope_key,
+            fingerprint=fingerprint,
+            agent_id=acting_agent_id,
+        )
+
+
+def _execute_write_entity(
+    *,
+    action: WriteEntityAction,
+    store: TenantStore,
+    schema: SchemaRegistry,
+    acting_agent_id: str,
+) -> None:
+    """Run a WriteEntityAction through the same ACL gate as a regular write."""
+    try:
+        result = write_field(
+            store=store,
+            schema=schema,
+            agent_id=acting_agent_id,
+            entity_type=action.entity_type,
+            entity_key=action.entity_key,
+            field_name=action.field_name,
+            value_json=action.value_json,
+        )
+        logger.info(
+            "skill action: WriteEntity %s/%s.%s → %s",
+            action.entity_type,
+            action.entity_key,
+            action.field_name,
+            result.status.value,
+        )
+    except (ValueError, RuntimeError, IntegrityError) as exc:
+        logger.error("skill action WriteEntity failed: %r (%s)", action, exc, exc_info=True)
+
+
+def _execute_notify(
+    *,
+    action: NotifyAction,
+    store: TenantStore,
+    event_bus: EventBus | None,
+) -> None:
+    """Publish a NotifyAction onto the EventBus (when wired) and always log."""
+    logger.info("skill notify %s: %s", action.channel, action.message)
+    if event_bus is None:
+        return
+    event_bus.publish(
+        Event(
+            kind="notify",
+            tenant_id=store.tenant_id,
+            payload={
+                "channel": action.channel,
+                "message": action.message,
+            },
+        )
+    )
+
+
+def _action_fingerprint(action: SkillAction) -> str:
+    """Stable SHA-256 over the action's normalized payload.
+
+    Different action types use different fields, so the fingerprint includes
+    `type` to keep the namespace clean. Sorted JSON keeps the byte string
+    deterministic across Python runs.
+    """
+    match action:
+        case WriteEntityAction():
+            payload = {
+                "type": action.type,
+                "entity_type": action.entity_type,
+                "entity_key": action.entity_key,
+                "field_name": action.field_name,
+                "value_json": action.value_json,
+            }
+        case NotifyAction():
+            payload = {
+                "type": action.type,
+                "channel": action.channel,
+                "message": action.message,
+            }
+        case _:
+            # Fall back to repr for unknown types — they're skipped before this
+            # path normally, but defense in depth.
+            payload = {"type": "unknown", "repr": repr(action)}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _already_executed(store: TenantStore, *, scope_key: str, fingerprint: str) -> bool:
+    """Return True if a SkillActionExecutionRow already records this action."""
+    with store.session() as session:
+        row = session.exec(
+            select(SkillActionExecutionRow).where(
+                SkillActionExecutionRow.scope_key == scope_key,
+                SkillActionExecutionRow.action_fingerprint == fingerprint,
+            )
+        ).first()
+    return row is not None
+
+
+def _record_execution(
+    store: TenantStore,
+    *,
+    scope_key: str,
+    fingerprint: str,
+    agent_id: str,
+) -> None:
+    """Insert the dedupe row. A UNIQUE-constraint race is silent (already done)."""
+    try:
+        with store.session() as session:
+            session.add(
+                SkillActionExecutionRow(
+                    scope_key=scope_key,
+                    action_fingerprint=fingerprint,
+                    executed_by_agent_id=agent_id,
                 )
-            except Exception:
-                logger.exception("skill action WriteEntity failed: %r", action)
-        elif isinstance(action, NotifyAction):
-            try:
-                logger.info("skill notify %s: %s", action.channel, action.message)
-                if event_bus is not None:
-                    event_bus.publish(
-                        Event(
-                            kind="notify",
-                            tenant_id=store.tenant_id,
-                            payload={
-                                "channel": action.channel,
-                                "message": action.message,
-                            },
-                        )
-                    )
-            except Exception:
-                logger.exception("skill action Notify failed: %r", action)
-        else:
-            logger.warning("skill action: unknown type %s — dropping", type(action).__name__)
+            )
+            session.commit()
+    except IntegrityError:
+        # Concurrent racer beat us to it — the action ran twice in this window
+        # but the constraint protects future calls. Log so we have a signal if
+        # this gets noisy.
+        logger.info(
+            "skill action: race-condition dedupe scope=%s fingerprint=%s",
+            scope_key,
+            fingerprint[:12],
+        )
 
 
 def _to_field_value(resolved) -> FieldValue:

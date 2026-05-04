@@ -52,11 +52,33 @@ class EventBus:
     the event onto every active subscriber queue best-effort — a slow
     subscriber gets dropped events when its queue fills (queue maxsize=64).
     Demo pattern, not production durability.
+
+    Thread safety (Codex 2026-05-03 medium finding): FastAPI runs sync route
+    handlers in a worker thread, so `publish()` is invoked off the serving
+    event loop. `asyncio.Queue.put_nowait` is NOT thread-safe; calling it
+    from a worker thread can drop events or corrupt internal queue state.
+    The bus captures the running loop in `__init__` (must be constructed
+    inside the lifespan / on the serving loop) and routes every per-
+    subscriber `put_nowait` through `loop.call_soon_threadsafe`. When the
+    publisher *is* on the loop, this still works — the call schedules on
+    the next loop iteration. Same-thread async publishers see a single-
+    iteration delay, which is acceptable for this demo bus.
     """
 
     def __init__(self) -> None:
         self._subscribers: list[asyncio.Queue[Event]] = []
         self._lock = asyncio.Lock()
+        # Capture the serving loop so cross-thread publish calls can use
+        # `call_soon_threadsafe`. Must be constructed on the loop that will
+        # service subscriber queues — i.e. inside the lifespan.
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "EventBus must be constructed inside a running event loop "
+                "(typically the FastAPI lifespan). The captured loop is used "
+                "to route cross-thread publishes via call_soon_threadsafe."
+            ) from exc
 
     async def subscribe(self) -> asyncio.Queue[Event]:
         """Register a new subscriber and return its queue."""
@@ -73,23 +95,28 @@ class EventBus:
     def publish(self, event: Event) -> int:
         """Synchronously fan-out. Returns the number of subscribers reached.
 
-        Best-effort: if a subscriber queue is full, the event is dropped for
-        that subscriber and a warning logs (the subscriber missed an event;
-        the rest still got it). Use `asyncio.create_task` to call this from
-        sync code by wrapping in `loop.call_soon_threadsafe(...)` if needed.
+        Safe to call from any thread — `put_nowait` is scheduled onto the
+        captured loop via `call_soon_threadsafe`. Returns the count of
+        subscribers that were *targeted* at publish time; actual queue
+        admission happens when the loop drains the scheduled callbacks. A
+        full queue logs a warning from inside the scheduled callback.
         """
-        delivered = 0
-        for q in list(self._subscribers):
-            try:
-                q.put_nowait(event)
-                delivered += 1
-            except asyncio.QueueFull:
-                logger.warning(
-                    "EventBus: subscriber queue full, dropping event kind=%s ts=%s",
-                    event.kind,
-                    event.ts,
-                )
-        return delivered
+        snapshot = list(self._subscribers)
+        for q in snapshot:
+            self._loop.call_soon_threadsafe(self._enqueue, q, event)
+        return len(snapshot)
+
+    @staticmethod
+    def _enqueue(q: asyncio.Queue[Event], event: Event) -> None:
+        """Loop-thread callback: put the event on the queue, log on overflow."""
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning(
+                "EventBus: subscriber queue full, dropping event kind=%s ts=%s",
+                event.kind,
+                event.ts,
+            )
 
 
 __all__ = ["Event", "EventBus"]
