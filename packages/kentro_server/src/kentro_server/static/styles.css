@@ -117,6 +117,55 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   overflow: hidden;
   position: relative;
 }
+
+/* Bottom-row tabbed workspace: ingestion + reasoning graph share 2 columns */
+.work-panel {
+  grid-column: 1 / 3;
+  grid-row: 2;
+}
+.work-tabs {
+  gap: 4px;
+  padding: 6px 12px;
+}
+.work-tab {
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  cursor: pointer;
+  border-radius: 5px;
+  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.work-tab:hover { color: var(--ink-2); background: oklch(1 0 0 / 0.5); }
+.work-tab.active {
+  background: linear-gradient(180deg, var(--ink), oklch(0.22 0.02 260));
+  color: var(--bg);
+  box-shadow: 0 2px 6px oklch(0.16 0.02 260 / 0.2), 0 1px 0 oklch(1 0 0 / 0.1) inset;
+}
+.work-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.work-pane {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+/* Inner panels render their own .panel chrome — suppress the duplicate border
+ * and head since WorkPanel already provides those.
+ */
+.work-pane > .panel {
+  border: none;
+  background: transparent;
+  flex: 1;
+  min-height: 0;
+}
+.work-pane > .panel > .panel-head { display: none; }
 .panel {
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -964,12 +1013,12 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .add-doc button:hover { border-color: var(--accent); color: var(--accent); }
 .add-doc button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Graph viz */
+/* Graph viz (d3-sankey) */
 .graph-wrap {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 260px;
+  min-height: 320px;
   background:
     radial-gradient(circle at 30% 50%, oklch(0.96 0.04 255 / 0.4), transparent 60%),
     radial-gradient(circle at 80% 70%, oklch(0.96 0.04 320 / 0.3), transparent 55%);
@@ -978,54 +1027,77 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   width: 100%; height: 100%;
   display: block;
 }
-.graph-legend {
-  position: absolute; top: 10px; right: 10px;
-  background: oklch(1 0 0 / 0.85);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-  padding: 8px 10px;
+
+.sankey-svg .sankey-col-label {
   font-family: var(--sans);
-  font-weight: 500;
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  fill: var(--ink-3);
+}
+
+/* Links (ribbons) */
+.sankey-svg .sankey-link {
+  fill: none;
+  stroke: oklch(0.78 0.02 260);
+  stroke-opacity: 0.45;
+  transition: stroke-opacity 160ms, stroke 160ms;
+  cursor: pointer;
+}
+.sankey-svg .sankey-link.dim { stroke-opacity: 0.08; }
+.sankey-svg .sankey-link.hot {
+  stroke: oklch(0.55 0.18 255);
+  stroke-opacity: 0.78;
+}
+.sankey-svg .sankey-link-focus {
+  stroke: oklch(0.68 0.18 55);
+  stroke-opacity: 0.7;
+}
+
+/* Nodes */
+.sankey-svg .sankey-node rect {
+  transition: opacity 160ms, filter 160ms;
+}
+.sankey-svg .sankey-node-document rect {
+  fill: oklch(0.98 0.005 260);
+  stroke: var(--line);
+}
+.sankey-svg .sankey-node-entity rect {
+  fill: oklch(0.55 0.18 255);
+  stroke: oklch(0.5 0.2 255);
+}
+.sankey-svg .sankey-node.dim rect { opacity: 0.25; }
+.sankey-svg .sankey-node.hot rect {
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.sankey-svg .sankey-node-focus rect {
+  filter: drop-shadow(0 0 10px var(--accent-glow));
+}
+.sankey-svg .sankey-node { cursor: pointer; }
+
+/* Labels */
+.sankey-svg .sankey-label {
+  font-family: var(--sans);
   font-size: 10px;
-  color: var(--ink-2);
-  border-radius: 8px;
-  box-shadow: var(--shadow-md);
+  fill: var(--ink);
+  pointer-events: none;
+  transition: opacity 160ms;
 }
-
-/* Graph node animations */
-@keyframes nodePulse {
-  0%, 100% { filter: drop-shadow(0 0 0 transparent); }
-  50% { filter: drop-shadow(0 0 8px var(--accent-glow)); }
+.sankey-svg .sankey-node.dim .sankey-label { opacity: 0.3; }
+/* Hide labels on tiny nodes by default; show them on hover via .hot. */
+.sankey-svg .sankey-node.has-tiny-label .sankey-label { opacity: 0; }
+.sankey-svg .sankey-node.has-tiny-label.hot .sankey-label { opacity: 1; }
+.sankey-svg .sankey-label-icon { font-weight: 600; }
+.sankey-svg .sankey-label-sub {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--ink-3);
 }
-.graph-svg .node-entity { animation: nodePulse 3s ease-in-out infinite; }
-.graph-svg .node-conflict {
-  animation: conflictPulse 1.4s ease-in-out infinite;
-}
-@keyframes conflictPulse {
-  0%, 100% { filter: drop-shadow(0 0 0 transparent); }
-  50% { filter: drop-shadow(0 0 6px var(--warn-glow)); }
-}
-.graph-svg .node-highlight {
-  animation: highlightPulse 1.2s ease-in-out infinite;
-}
-@keyframes highlightPulse {
-  0%, 100% { filter: drop-shadow(0 0 4px var(--accent-glow)); }
-  50% { filter: drop-shadow(0 0 14px var(--accent-glow)); }
-}
-
-/* Flow particle on edges */
-.graph-svg .flow-particle {
-  fill: var(--accent);
-  filter: drop-shadow(0 0 4px var(--accent-glow));
-}
-.graph-svg .flow-particle-warn {
-  fill: var(--warn);
-  filter: drop-shadow(0 0 6px var(--warn-glow));
-}
-.graph-legend .row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
-.graph-legend .swatch {
-  width: 10px; height: 10px; display: inline-block;
+.sankey-svg .sankey-label-type { font-weight: 700; }
+.sankey-svg .sankey-label-key {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--ink-3);
 }
 
 /* Lineage drawer */

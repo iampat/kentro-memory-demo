@@ -803,14 +803,12 @@ function App() {
         />
         <PolicyEditor refresh={refresh} onApplied={bumpRefresh} />
 
-        <K.ExtractionPanel
+        <K.WorkPanel
           documents={documents}
           activeDocId={activeDocId}
           onPickDoc={setActiveDocId}
           onIngestEmail={onIngestEmail}
           pendingDoc={pendingDoc}
-        />
-        <K.GraphPanel
           refresh={refresh}
           highlightField={drawerPayload}
         />

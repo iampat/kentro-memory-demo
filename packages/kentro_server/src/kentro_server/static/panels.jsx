@@ -151,10 +151,212 @@ window.K.ExtractionPanel = function ExtractionPanel({
 };
 
 // ── Graph Panel ──────────────────────────────────────────────────────────────
-// Bipartite layout: documents on the left, entities on the right.
+// d3-sankey layout: source documents on the left, entity records on the right,
+// ribbon thickness = number of field-writes between that (doc, entity) pair.
+// Hover a node to dim everything that isn't connected to it (neighbor focus).
+//
+// Why sankey: the previous bipartite SVG rendered one path + one animated dot
+// per field-write (~100 paths) and let the right column overflow. Sankey
+// aggregates per-pair, so 100 raw edges collapse to ~30 visually distinct
+// ribbons, and node y-positions are auto-computed to avoid overlap.
+function renderSankey({ svg, width, height, graph, highlightField }) {
+  const d3 = window.d3;
+  const root = d3.select(svg);
+  root.selectAll("*").remove();
+  root.attr("viewBox", `0 0 ${width} ${height}`).attr("preserveAspectRatio", "xMidYMid meet");
+
+  // Aggregate raw field-writes into one link per (source, target) with value =
+  // count. Keep the field names so the lineage hover-tip can show what flowed.
+  const linkMap = new Map();
+  for (const e of graph.edges) {
+    const key = `${e.source}→${e.target}`;
+    const cur = linkMap.get(key);
+    if (cur) {
+      cur.value += 1;
+      cur.fields.push(e.field_name);
+    } else {
+      linkMap.set(key, {
+        source: e.source,
+        target: e.target,
+        value: 1,
+        fields: [e.field_name],
+      });
+    }
+  }
+  const links = Array.from(linkMap.values());
+
+  // d3-sankey mutates its input — give it a fresh copy each render.
+  const nodes = graph.nodes.map((n) => ({ ...n }));
+
+  const sankeyGen = d3
+    .sankey()
+    .nodeId((d) => d.id)
+    .nodeAlign(d3.sankeyJustify)
+    .nodeWidth(12)
+    .nodePadding(4)
+    .extent([
+      [180, 18],
+      [width - 240, height - 10],
+    ]);
+
+  let layout;
+  try {
+    layout = sankeyGen({ nodes, links: links.map((l) => ({ ...l })) });
+  } catch {
+    return; // bad data shape — render nothing rather than crash
+  }
+  const laidOutNodes = layout.nodes;
+  const laidOutLinks = layout.links;
+
+  // Build neighbor index so hover can dim non-connected nodes/links in one
+  // pass without recomputing per-element.
+  const neighborsByNode = new Map();
+  for (const n of laidOutNodes) neighborsByNode.set(n.id, new Set([n.id]));
+  for (const l of laidOutLinks) {
+    neighborsByNode.get(l.source.id).add(l.target.id);
+    neighborsByNode.get(l.target.id).add(l.source.id);
+  }
+  const linkTouchesNode = (link, nodeId) =>
+    link.source.id === nodeId || link.target.id === nodeId;
+
+  // Resolve highlightField (a field-level click in another panel) to a
+  // (sourceId | null, targetId) pair so the matching ribbons can render in
+  // the highlight color even without hover.
+  const focusTargetId = highlightField
+    ? `ent:${highlightField.entity_type}:${highlightField.entity_key}`
+    : null;
+
+  // Column labels.
+  root
+    .append("text")
+    .attr("class", "sankey-col-label")
+    .attr("x", 70)
+    .attr("y", 14)
+    .attr("text-anchor", "middle")
+    .text("SOURCES");
+  root
+    .append("text")
+    .attr("class", "sankey-col-label")
+    .attr("x", width - 80)
+    .attr("y", 14)
+    .attr("text-anchor", "middle")
+    .text("ENTITIES");
+
+  // Links — d3.sankeyLinkHorizontal returns the path generator. Stroke width
+  // scales with field-count so dense pairs read as thicker ribbons.
+  const linkSel = root
+    .append("g")
+    .attr("class", "sankey-links")
+    .selectAll("path")
+    .data(laidOutLinks)
+    .enter()
+    .append("path")
+    .attr("class", (d) =>
+      focusTargetId && d.target.id === focusTargetId
+        ? "sankey-link sankey-link-focus"
+        : "sankey-link"
+    )
+    .attr("d", d3.sankeyLinkHorizontal())
+    .attr("stroke-width", (d) => Math.max(1.2, d.width));
+  linkSel.append("title").text((d) => `${d.source.label} → ${d.target.label}\n${d.value} field(s): ${d.fields.join(", ")}`);
+
+  // Nodes — entities (right column) get the gradient fill; documents (left)
+  // get a card-like rect with the doc-type icon + filename.
+  const nodeG = root
+    .append("g")
+    .attr("class", "sankey-nodes")
+    .selectAll("g")
+    .data(laidOutNodes)
+    .enter()
+    .append("g")
+    .attr("class", (d) => {
+      const isFocus = focusTargetId && d.id === focusTargetId;
+      return `sankey-node sankey-node-${d.kind}${isFocus ? " sankey-node-focus" : ""}`;
+    })
+    .attr("transform", (d) => `translate(${d.x0}, ${d.y0})`);
+
+  nodeG
+    .append("rect")
+    .attr("width", (d) => d.x1 - d.x0)
+    .attr("height", (d) => Math.max(2, d.y1 - d.y0))
+    .attr("rx", 3);
+
+  // Document labels (left side, anchored to the right of the column so the
+  // text reads inward toward the ribbons).
+  nodeG
+    .filter((d) => d.kind === "document")
+    .each(function (d) {
+      const meta = K.docMeta({ source_class: d.sub, label: d.label });
+      const g = d3.select(this);
+      const labelX = -8;
+      const labelY = (d.y1 - d.y0) / 2;
+      const text = g
+        .append("text")
+        .attr("class", "sankey-label sankey-label-doc")
+        .attr("x", labelX)
+        .attr("y", labelY)
+        .attr("dy", "0.32em")
+        .attr("text-anchor", "end");
+      text.append("tspan").attr("class", "sankey-label-icon").text(`${meta.icon} ${meta.typeLabel} `);
+      const trimmed = (d.label || "").replace(/\.md$/, "");
+      text
+        .append("tspan")
+        .attr("class", "sankey-label-sub")
+        .text(trimmed.length > 24 ? trimmed.slice(0, 22) + "…" : trimmed);
+    });
+
+  // Entity labels (right side). Sankey allocates vertical space proportional
+  // to ribbon weight, so a long-tail of low-traffic entities ends up with
+  // <10px of room — labels there overlap and become unreadable. Mark those
+  // nodes with `.has-tiny-label` so CSS can hide the label by default and
+  // re-show it on hover (the neighbor-focus handler also adds `.hot`).
+  nodeG
+    .filter((d) => d.kind === "entity")
+    .each(function (d) {
+      const g = d3.select(this);
+      const nodeH = d.y1 - d.y0;
+      const labelX = (d.x1 - d.x0) + 8;
+      const labelY = nodeH / 2;
+      if (nodeH < 12) g.classed("has-tiny-label", true);
+      const text = g
+        .append("text")
+        .attr("class", "sankey-label sankey-label-ent")
+        .attr("x", labelX)
+        .attr("y", labelY)
+        .attr("dy", "0.32em")
+        .attr("text-anchor", "start");
+      text.append("tspan").attr("class", "sankey-label-type").text(`${d.sub} `);
+      text.append("tspan").attr("class", "sankey-label-key").text(d.label);
+      // Tooltip so labels hidden via .has-tiny-label are still discoverable
+      // by hovering the rectangle itself.
+      g.append("title").text(`${d.sub} · ${d.label} (${d.value} field-write${d.value === 1 ? "" : "s"})`);
+    });
+
+  // Neighbor highlight: on hover, mark connected nodes/links and dim the rest.
+  // Uses class toggles so the visual state is driven by CSS, not inline attrs
+  // (lets us tune colors / transitions in styles.css without touching JS).
+  function focus(nodeId) {
+    const neighbors = neighborsByNode.get(nodeId) || new Set([nodeId]);
+    nodeG.classed("dim", (d) => !neighbors.has(d.id));
+    nodeG.classed("hot", (d) => d.id === nodeId);
+    linkSel.classed("dim", (l) => !linkTouchesNode(l, nodeId));
+    linkSel.classed("hot", (l) => linkTouchesNode(l, nodeId));
+  }
+  function unfocus() {
+    nodeG.classed("dim", false).classed("hot", false);
+    linkSel.classed("dim", false).classed("hot", false);
+  }
+  nodeG.on("mouseenter", (_evt, d) => focus(d.id)).on("mouseleave", unfocus);
+  linkSel
+    .on("mouseenter", (_evt, l) => focus(l.target.id))
+    .on("mouseleave", unfocus);
+}
+
 window.K.GraphPanel = function GraphPanel({ refresh, highlightField }) {
   const [graph, setGraph] = useState({ nodes: [], edges: [] });
   const [loading, setLoading] = useState(true);
+  const svgRef = useRef(null);
+  const wrapRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,56 +377,52 @@ window.K.GraphPanel = function GraphPanel({ refresh, highlightField }) {
     };
   }, [refresh]);
 
-  const W = 700;
-  const H = 360;
-  const docX = 70;
-  const entX = 600;
-
   const docs = graph.nodes.filter((n) => n.kind === "document");
   const ents = graph.nodes.filter((n) => n.kind === "entity");
 
-  const docPos = {};
-  docs.forEach((d, i) => {
-    docPos[d.id] = {
-      x: docX,
-      y: 50 + i * ((H - 100) / Math.max(1, docs.length - 1 || 1)),
-    };
-  });
-  const entPos = {};
-  ents.forEach((e, i) => {
-    entPos[e.id] = {
-      x: entX,
-      y: 50 + i * ((H - 100) / Math.max(1, ents.length - 1 || 1)),
-    };
-  });
+  // Render whenever data, highlight, or container size change. Sankey layout
+  // depends on width/height so we observe the wrapper and recompute on resize.
+  useEffect(() => {
+    if (!svgRef.current || !wrapRef.current) return;
+    if (docs.length === 0 || ents.length === 0) return;
+    if (!window.d3 || typeof window.d3.sankey !== "function") return;
 
-  const edgePath = (from, to) => {
-    const fx = from.x + 50;
-    const fy = from.y;
-    const tx = to.x - 60;
-    const ty = to.y;
-    const cx = (fx + tx) / 2;
-    return `M ${fx} ${fy} C ${cx} ${fy}, ${cx} ${ty}, ${tx} ${ty}`;
-  };
+    const d3 = window.d3;
+    const draw = () => {
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      const width = wrap.clientWidth || 700;
+      const height = wrap.clientHeight || 360;
+      renderSankey({
+        svg: svgRef.current,
+        width,
+        height,
+        graph,
+        highlightField,
+      });
+    };
 
-  const isEdgeHighlighted = (e) => {
-    if (!highlightField) return false;
-    const targetId = `ent:${highlightField.entity_type}:${highlightField.entity_key}`;
-    return e.target === targetId && e.field_name === highlightField.field_name;
-  };
+    draw();
+    const ro = new ResizeObserver(draw);
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, [graph, highlightField]);
+
+  // Aggregate edges per (source, target) for the badge in panel-head.
+  const linkPairCount = new Set(graph.edges.map((e) => `${e.source}→${e.target}`)).size;
 
   return (
     <div className="panel">
       <div className="panel-head">
         <span className="panel-title">Reasoning graph</span>
-        <span className="panel-sub">all memory</span>
+        <span className="panel-sub">all memory · hover to focus</span>
         <span className="spacer" />
         <span className="panel-sub">
-          {docs.length} sources · {ents.length} entities · {graph.edges.length} edges
+          {docs.length} sources · {ents.length} entities · {linkPairCount} flows
         </span>
       </div>
       <div className="panel-body" style={{ padding: 0 }}>
-        <div className="graph-wrap">
+        <div className="graph-wrap" ref={wrapRef}>
           {loading && (
             <div style={{ padding: 14, color: "var(--ink-3)", fontSize: 11 }}>loading graph…</div>
           )}
@@ -233,202 +431,62 @@ window.K.GraphPanel = function GraphPanel({ refresh, highlightField }) {
               No documents or entities yet.
             </div>
           )}
-          {!loading && docs.length > 0 && ents.length > 0 && (
-            <svg
-              className="graph-svg"
-              viewBox={`0 0 ${W} ${H}`}
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <defs>
-                <linearGradient id="entGrad" x1="0" x2="1">
-                  <stop offset="0%" stopColor="oklch(0.55 0.18 255)" />
-                  <stop offset="100%" stopColor="oklch(0.6 0.20 285)" />
-                </linearGradient>
-                <linearGradient id="docGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="oklch(1 0 0)" />
-                  <stop offset="100%" stopColor="oklch(0.96 0.01 260)" />
-                </linearGradient>
-                <filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur in="SourceAlpha" stdDeviation="2" />
-                  <feOffset dy="2" />
-                  <feComponentTransfer>
-                    <feFuncA type="linear" slope="0.15" />
-                  </feComponentTransfer>
-                  <feMerge>
-                    <feMergeNode />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-              <text
-                x={docX}
-                y={18}
-                textAnchor="middle"
-                fontFamily="Inter, sans-serif"
-                fontWeight="700"
-                fontSize="9"
-                fill="var(--ink-3)"
-                letterSpacing="1.5"
-              >
-                SOURCES
-              </text>
-              <text
-                x={entX}
-                y={18}
-                textAnchor="middle"
-                fontFamily="Inter, sans-serif"
-                fontWeight="700"
-                fontSize="9"
-                fill="var(--ink-3)"
-                letterSpacing="1.5"
-              >
-                ENTITIES
-              </text>
-              {graph.edges.map((e, i) => {
-                const from = docPos[e.source];
-                const to = entPos[e.target];
-                if (!from || !to) return null;
-                const hl = isEdgeHighlighted(e);
-                return (
-                  <g key={i}>
-                    <path
-                      d={edgePath(from, to)}
-                      stroke={hl ? "oklch(0.68 0.18 55)" : "oklch(0.78 0.02 260)"}
-                      strokeWidth={hl ? 2 : 1.2}
-                      fill="none"
-                    />
-                    <circle r={hl ? 3 : 2} className="flow-particle">
-                      <animateMotion
-                        dur={`${2 + (i % 3) * 0.5}s`}
-                        repeatCount="indefinite"
-                        begin={`${(i % 5) * 0.3}s`}
-                        path={edgePath(from, to)}
-                      />
-                      <animate
-                        attributeName="opacity"
-                        values="0;1;1;0"
-                        keyTimes="0;0.1;0.9;1"
-                        dur={`${2 + (i % 3) * 0.5}s`}
-                        repeatCount="indefinite"
-                        begin={`${(i % 5) * 0.3}s`}
-                      />
-                    </circle>
-                  </g>
-                );
-              })}
-              {docs.map((d) => {
-                const p = docPos[d.id];
-                // Reuse the same doc → {icon, typeLabel} mapping as the
-                // ExtractionPanel doc-list so verbal/email/ticket/note nodes
-                // render with the prototype's per-type label and emoji.
-                const meta = K.docMeta({ source_class: d.sub, label: d.label });
-                return (
-                  <g
-                    key={d.id}
-                    transform={`translate(${p.x - 50}, ${p.y - 16})`}
-                    filter="url(#softShadow)"
-                  >
-                    <rect width="100" height="32" rx="6" fill="url(#docGrad)" stroke="var(--line)" />
-                    <text
-                      x="10"
-                      y="14"
-                      fontFamily="Inter, sans-serif"
-                      fontWeight="600"
-                      fontSize="10"
-                      fill="var(--ink)"
-                    >
-                      {meta.icon} {meta.typeLabel}
-                    </text>
-                    <text
-                      x="10"
-                      y="25"
-                      fontFamily="JetBrains Mono, monospace"
-                      fontSize="8"
-                      fill="var(--ink-3)"
-                    >
-                      {(d.label || "").slice(0, 18)}
-                    </text>
-                  </g>
-                );
-              })}
-              {ents.map((e) => {
-                const p = entPos[e.id];
-                const hl =
-                  highlightField &&
-                  e.id === `ent:${highlightField.entity_type}:${highlightField.entity_key}`;
-                return (
-                  <g
-                    key={e.id}
-                    transform={`translate(${p.x - 60}, ${p.y - 16})`}
-                    className={K.cls("node-entity", hl && "node-highlight")}
-                  >
-                    <rect
-                      width="120"
-                      height="32"
-                      rx="6"
-                      fill="url(#entGrad)"
-                      stroke="oklch(0.5 0.2 255)"
-                    />
-                    <text
-                      x="12"
-                      y="14"
-                      fontFamily="Inter, sans-serif"
-                      fontWeight="700"
-                      fontSize="10"
-                      fill="white"
-                    >
-                      {e.sub}
-                    </text>
-                    <text
-                      x="12"
-                      y="25"
-                      fontFamily="JetBrains Mono, monospace"
-                      fontSize="9"
-                      fill="oklch(1 0 0 / 0.85)"
-                    >
-                      .{e.label}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          )}
-          <div className="graph-legend">
-            <div className="row">
-              <span
-                className="swatch"
-                style={{
-                  background: "white",
-                  border: "1px solid var(--line)",
-                  borderRadius: 3,
-                }}
-              ></span>{" "}
-              source doc
-            </div>
-            <div className="row">
-              <span
-                className="swatch"
-                style={{
-                  background: "linear-gradient(135deg, var(--accent), var(--pop))",
-                  borderRadius: 3,
-                }}
-              ></span>{" "}
-              entity
-            </div>
-            <div className="row" style={{ marginTop: 4, paddingTop: 4, borderTop: "1px dashed var(--line)" }}>
-              <span
-                className="swatch"
-                style={{
-                  background: "var(--accent)",
-                  borderRadius: "50%",
-                  width: 6,
-                  height: 6,
-                  boxShadow: "0 0 6px var(--accent-glow)",
-                }}
-              ></span>{" "}
-              data flow
-            </div>
-          </div>
+          <svg
+            ref={svgRef}
+            className="graph-svg sankey-svg"
+            style={{
+              display: !loading && docs.length > 0 && ents.length > 0 ? "block" : "none",
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Work Panel ──────────────────────────────────────────────────────────────
+// Tabbed wrapper that holds Ingestion pipeline + Reasoning graph in the same
+// horizontal slot. The graph needs more room than a 1fr column allows; tabbing
+// the two views lets whichever one is active take the full 2-column width.
+window.K.WorkPanel = function WorkPanel({
+  documents,
+  activeDocId,
+  onPickDoc,
+  onIngestEmail,
+  pendingDoc,
+  refresh,
+  highlightField,
+}) {
+  const [tab, setTab] = useState("graph");
+  return (
+    <div className="panel work-panel">
+      <div className="panel-head work-tabs">
+        <button
+          className={K.cls("work-tab", tab === "graph" && "active")}
+          onClick={() => setTab("graph")}
+        >
+          Reasoning graph
+        </button>
+        <button
+          className={K.cls("work-tab", tab === "ingest" && "active")}
+          onClick={() => setTab("ingest")}
+        >
+          Ingestion pipeline
+        </button>
+        <span className="spacer" />
+      </div>
+      <div className="panel-body work-body">
+        <div className="work-pane" style={{ display: tab === "graph" ? "flex" : "none" }}>
+          <K.GraphPanel refresh={refresh} highlightField={highlightField} />
+        </div>
+        <div className="work-pane" style={{ display: tab === "ingest" ? "flex" : "none" }}>
+          <K.ExtractionPanel
+            documents={documents}
+            activeDocId={activeDocId}
+            onPickDoc={onPickDoc}
+            onIngestEmail={onIngestEmail}
+            pendingDoc={pendingDoc}
+          />
         </div>
       </div>
     </div>
