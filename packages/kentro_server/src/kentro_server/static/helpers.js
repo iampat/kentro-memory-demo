@@ -3,6 +3,41 @@
 
 window.K = window.K || {};
 
+// docMeta(doc) — derive the prototype's per-doc presentation from
+// `source_class` (set during seed) + filename heuristics. Returns
+// {icon, typeLabel, sourceClass}.
+//   verbal  → 📞 Call
+//   email   → ✉️ Email
+//   ticket  → 🎫 Ticket
+//   note    → 📝 Note
+//   other   → 📄 Doc
+K.docMeta = function (doc) {
+  const sc = (doc && doc.source_class) || null;
+  const label = (doc && doc.label) || "";
+  // Re-infer when source_class is missing (older state, manual ingests).
+  let bucket = sc;
+  if (!bucket) {
+    const n = label.toLowerCase();
+    if (n.includes("call") || n.includes("transcript")) bucket = "verbal";
+    else if (n.includes("email")) bucket = "email";
+    else if (n.includes("ticket")) bucket = "ticket";
+    else if (n.includes("meeting_note") || n.includes("slack") || n.includes("note"))
+      bucket = "note";
+  }
+  switch (bucket) {
+    case "verbal":
+      return { icon: "📞", typeLabel: "Call", sourceClass: "verbal" };
+    case "email":
+      return { icon: "✉️", typeLabel: "Email", sourceClass: "written" };
+    case "ticket":
+      return { icon: "🎫", typeLabel: "Ticket", sourceClass: "written" };
+    case "note":
+      return { icon: "📝", typeLabel: "Note", sourceClass: "written" };
+    default:
+      return { icon: "📄", typeLabel: "Doc", sourceClass: bucket || null };
+  }
+};
+
 K.cls = function (...parts) {
   return parts.filter(Boolean).join(" ");
 };

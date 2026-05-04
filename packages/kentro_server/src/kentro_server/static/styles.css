@@ -1697,3 +1697,31 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* PR 15 — package-grouped policy list (one `package` header per Rego namespace) */
+.policy-package-group { margin-bottom: 14px; }
+.policy-package-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: var(--bg-3);
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.policy-package-header .policy-package-tag {
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: lowercase;
+}
+.policy-package-header .policy-package-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+.policy-package-header .policy-package-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ink-3);
+}

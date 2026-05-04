@@ -83,7 +83,7 @@ window.K.ExtractionPanel = function ExtractionPanel({
             </div>
           )}
           {documents.map((d) => {
-            const icon = d.source_class === "email" ? "✉️" : d.source_class === "verbal" ? "📞" : "📄";
+            const meta = K.docMeta(d);
             const ts = (d.created_at || "").split("T");
             return (
               <div
@@ -91,10 +91,10 @@ window.K.ExtractionPanel = function ExtractionPanel({
                 className={K.cls("doc-item", activeDocId === d.id && "active")}
                 onClick={() => onPickDoc(d.id)}
               >
-                <span className="doc-icon">{icon}</span>
+                <span className="doc-icon">{meta.icon}</span>
                 <span style={{ flex: 1 }}>
                   <div className="doc-name">
-                    {d.source_class || "doc"} · {ts[0] || "—"}
+                    {meta.typeLabel} · {ts[0] || "—"}
                   </div>
                   <div className="doc-meta">{d.label || d.id.slice(0, 8)}</div>
                 </span>
@@ -318,6 +318,10 @@ window.K.GraphPanel = function GraphPanel({ refresh, highlightField }) {
               })}
               {docs.map((d) => {
                 const p = docPos[d.id];
+                // Reuse the same doc → {icon, typeLabel} mapping as the
+                // ExtractionPanel doc-list so verbal/email/ticket/note nodes
+                // render with the prototype's per-type label and emoji.
+                const meta = K.docMeta({ source_class: d.sub, label: d.label });
                 return (
                   <g
                     key={d.id}
@@ -333,7 +337,7 @@ window.K.GraphPanel = function GraphPanel({ refresh, highlightField }) {
                       fontSize="10"
                       fill="var(--ink)"
                     >
-                      {d.sub || "doc"}
+                      {meta.icon} {meta.typeLabel}
                     </text>
                     <text
                       x="10"

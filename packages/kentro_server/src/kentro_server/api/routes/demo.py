@@ -22,7 +22,14 @@ from pydantic import BaseModel, ConfigDict
 from kentro_server.api.auth import AdminPrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep, TenantRegistryDep
 from kentro_server.core.rules import apply_ruleset
-from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
+from kentro_server.demo import (
+    AuditLog,
+    Customer,
+    Deal,
+    Person,
+    infer_source_class,
+    initial_demo_ruleset,
+)
 from kentro_server.extraction import ingest_document
 
 logger = logging.getLogger(__name__)
@@ -157,6 +164,7 @@ def seed_demo(
             written_by_agent_id=principal.agent_id,
             rule_version=rule_version,
             smart_model=settings.kentro_llm_smart_model,
+            source_class=infer_source_class(path.name),
         )
 
     return DemoSeedResponse(
