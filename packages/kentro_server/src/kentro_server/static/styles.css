@@ -108,7 +108,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   0%, 100% { box-shadow: 0 0 0 3px var(--accent-glow); }
   50% { box-shadow: 0 0 0 6px oklch(0.55 0.18 255 / 0.1); }
 }
-/* Main grid */
+/* Main grid — legacy 3×2 layout kept for the seed/empty state etc. */
 .main {
   display: grid;
   grid-template-columns: 1fr 1fr 360px;
@@ -118,7 +118,23 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   position: relative;
 }
 
-/* Bottom-row workspace: reasoning graph spans both bottom-left columns. */
+/* Post-PR-34: when only the reasoning graph is shown (the AgentPanels and
+ * standalone Policy / Access matrix are retired), `.main` becomes a single
+ * full-canvas cell. The right and bottom drawers cover this on demand. */
+.main.main-graph-only {
+  /* Reserve 440px on the right for the always-visible overlay rail so the
+   * graph never extends behind it (and never reflows when the rail's
+   * content changes). */
+  grid-template-columns: 1fr 440px;
+  grid-template-rows: 1fr;
+}
+.main.main-graph-only .work-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* Bottom-row workspace: reasoning graph spans both bottom-left columns
+ * (legacy layout — overridden by .main-graph-only). */
 .work-panel {
   grid-column: 1 / 3;
   grid-row: 2;
@@ -166,20 +182,12 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   cursor: not-allowed;
 }
 
-/* Source overlay (right-edge slide-over that covers everything except the
- * topbar). Anchored full-height at the right; ~50vw clamped to a sensible
- * range so it works on both narrow and ultrawide screens.
+/* Right rail — permanently reserved 440px on the right side. Hosts the
+ * SourceOverlay / EntityOverlay content; switches in place when the user
+ * clicks a different entity (no close + reopen animation). The backdrop
+ * is retired since the rail isn't modal anymore.
  */
-.source-overlay-backdrop {
-  position: fixed;
-  inset: 0;
-  background: oklch(0.18 0.01 80 / 0.32);
-  z-index: 200;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 180ms;
-}
-.source-overlay-backdrop.open { opacity: 1; pointer-events: auto; }
+.source-overlay-backdrop { display: none; }
 .source-overlay {
   position: fixed;
   top: 0; right: 0; bottom: 0;
@@ -187,13 +195,28 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   background: linear-gradient(180deg, oklch(0.99 0.005 260), oklch(0.97 0.01 260));
   border-left: 1px solid var(--line);
   z-index: 201;
-  transform: translateX(100%);
-  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  transform: none;
+  transition: opacity 160ms;
   display: flex;
   flex-direction: column;
   box-shadow: -16px 0 48px oklch(0.16 0.02 260 / 0.18);
 }
-.source-overlay.open { transform: translateX(0); }
+.source-overlay.open { transform: none; }
+/* When this rail has no payload selected (neither entity nor source), it
+ * still occupies its 440px so the graph layout doesn't reflow on every
+ * click. The empty-state placeholder fills the rail with a hint. */
+.source-overlay-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.6;
+}
 .source-overlay-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 18px;
@@ -1275,15 +1298,17 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   box-shadow: -16px 0 48px oklch(0.16 0.02 260 / 0.18);
 }
 .drawer.open { transform: translateX(0); }
-/* When EntityOverlay (z=201, 440px right-edge panel) is open, slide the
- * lineage drawer to the LEFT of it so both are visible side-by-side.
- * z-index bumps above the overlay's backdrop so the drawer is clickable,
- * but stays below the overlay itself so the overlay still receives clicks
- * on its own area. */
-.drawer.shifted {
+/* The right rail is always 440px wide, so the drawer (lineage / policy)
+ * always slides in to its LEFT. Bump z-index above the rail's backdrop
+ * region so the drawer is clickable. */
+.drawer {
   right: 440px;
-  z-index: 202;
 }
+.drawer.open { transform: translateX(0); }
+/* `.shifted` class kept for backwards compat — same effect as base .drawer
+ * now that the rail is permanent. Both selectors retained while we cut
+ * over so any caller still passing `shifted` is harmless. */
+.drawer.shifted { right: 440px; z-index: 202; }
 .drawer.shifted.open { transform: translateX(0); }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -2462,4 +2487,102 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+/* ── EntityOverlay header: ACL chip + esc, side-by-side ──────────────────── */
+.entity-overlay-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.entity-overlay-acl-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.entity-overlay-acl-chip:hover {
+  background: var(--accent);
+  color: oklch(0.99 0 0);
+}
+
+/* ── PolicyOverlay — type-scoped Access matrix + Rules + NL editor ──────────
+ * Reuses the existing .drawer chrome (right-edge slide-over, 520px, optional
+ * .shifted=440px to clear EntityOverlay) so it stacks identically to the
+ * LineageDrawer in the same slot. Scoped styles live here.
+ */
+.policy-overlay-body {
+  padding: 18px 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.policy-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.policy-section-heading {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.policy-section-count {
+  font-weight: 500;
+  color: var(--ink-2);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+
+/* Parse warning — surfaces the LLM's notes when 0 rules came back. */
+.parse-warn {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid oklch(0.78 0.14 60);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: oklch(0.99 0.012 60);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.parse-warn-head {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: oklch(0.45 0.13 60);
+  letter-spacing: 0.02em;
+}
+.parse-warn-body {
+  font-size: 11px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.parse-warn-hint {
+  font-size: 10px;
+  color: var(--ink-3);
+  font-style: italic;
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
 }

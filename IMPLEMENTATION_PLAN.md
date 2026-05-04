@@ -407,7 +407,9 @@ Five UI improvements requested by the user during demo polish, to be shipped one
 | 2 | Click an entity → show global view + per-agent view | `done` | 33 |
 | — | Lineage drawer redesigned as animated CANDIDATES → RESOLVER → RESULT pipeline (SVG, per-source color, per-write values) | `done` | 33 |
 | — | Server: admin (`is_admin=true`) bypasses ACL on reads; `ingestion_agent` split off as a non-admin worker | `done` | 33 |
-| 1+4 | Move pane selector to the top + give extracted entities more space (incl. PolicyOverlay + AgentPanel removal) | `pending` | — |
+| 1+4 | Move pane selector to the top + give extracted entities more space (incl. PolicyOverlay + AgentPanel removal) | `done` | 34 |
+| — | Permanent right rail (440px reserved) so switching entities updates content in place rather than slide-out + slide-in | `done` | 34 |
+| — | NL rule parser: `nl_to_rule/SKILL.md` rewritten with exact Rule discriminator JSON shapes; `nl_to_ruleset.py` surfaces validation errors instead of "(N errors)" | `done` | 34 |
 | 5 | Inter-entity edges in the reasoning graph | `pending` | — |
 
 **Order rationale:** #3 first — self-contained content viewer, no layout reshuffling, immediately strengthens the "see what was extracted" narrative. #2 next — same drawer pattern as the existing LineageDrawer, easy to extend. #1 + #4 are layout changes that affect each other; planned together as a single PR. #5 last — it's the biggest data-model change since `/viz/graph` currently only returns doc→entity edges, so we need server-side work to compute entity-entity references.
