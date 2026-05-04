@@ -2370,13 +2370,19 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   flex-direction: row;
   align-items: stretch;
   justify-content: space-between;
-  gap: 0;
+  gap: 28px;
   padding: 32px 16px 24px;
   min-height: 480px;
 }
 .flow-h2-col-cands { width: 200px; flex-shrink: 0; }
-.flow-h2-col-resolver { flex-shrink: 0; min-width: 140px; }
-.flow-h2-col-result { flex-shrink: 0; min-width: 100px; }
+/* Resolver column is wide enough that the centered RESOLVE pill (~96px)
+ * leaves ~70-100px of clear horizontal space on each side. That space is
+ * where the SVG curve labels (candidate value previews) live; if the
+ * column is narrower they collide with the pill. */
+.flow-h2-col-resolver { width: 240px; flex-shrink: 0; }
+/* Result column absorbs the remaining horizontal space so a long resolved
+ * value can use it. min-width: 0 lets the pill's ellipsis kick in cleanly. */
+.flow-h2-col-result { flex: 1 1 auto; min-width: 120px; }
 .flow-h2-svg {
   position: absolute;
   inset: 0;
@@ -2409,7 +2415,10 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   justify-content: center;
 }
 .flow-h2-col-resolver .flow-h2-col-body { gap: 8px; align-items: center; }
-.flow-h2-col-result .flow-h2-col-body { align-items: flex-start; }
+/* `stretch` (the default) is critical — it lets .flow-h2-result-wrap fill
+ * the column width, which is what makes max-width: 100% on the pill resolve
+ * to the column width rather than to the pill's own content size. */
+.flow-h2-col-result .flow-h2-col-body { align-items: stretch; }
 
 /* Candidate card — names live here. Border + bg colors are inline-styled
  * from the per-source palette so each row reads as a distinct origin. */
@@ -2465,6 +2474,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   min-width: 0;
 }
 
+
 /* Resolver chip — dark pill in the middle column, matches the reference
  * exactly: bold "RESOLVE" title, lowercase resolver name as subtitle. */
 .flow-h2-resolver {
@@ -2494,6 +2504,21 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   color: oklch(0.85 0.01 260);
   letter-spacing: 0.04em;
 }
+/* Resolver name now lives outside the pill as a caption underneath, so the
+ * pill itself stays a compact ~80px "RESOLVE" chip. Keeping the name out
+ * of the pill is what gives the candidate→resolver curves enough
+ * horizontal room to host value labels. */
+.flow-h2-resolver-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: lowercase;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.3;
+}
 .flow-h2-resolver-detail {
   font-family: var(--mono);
   font-size: 10px;
@@ -2513,20 +2538,115 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   max-width: 160px;
 }
 
-/* Result chip — orange-tinted pill carrying the resolved value. */
+/* Result chip — orange-tinted pill carrying the resolved value. The pill
+ * is hard-clamped so a long string or array preview can never blow out
+ * the column; click reveals the full value in a popover anchored below. */
+.flow-h2-result-wrap {
+  position: relative;
+  display: block;
+  /* col-body's align-items:stretch makes this fill the column width. */
+}
 .flow-h2-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 14px;
   border-radius: 10px;
   background: oklch(0.65 0.18 35);
   color: oklch(0.99 0 0);
   box-shadow: var(--shadow-sm);
+  /* Adaptive: fill the column the wrap stretched into, capped at 520px so
+   * the pill stays sane on very wide layouts. The inner value span clamps
+   * with ellipsis to whatever's left after the optional count badge. */
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+  box-sizing: border-box;
+  transition: transform 120ms, filter 120ms;
 }
 .flow-h2-result.status-unresolved { background: oklch(0.55 0.05 260); }
+.flow-h2-result.is-clickable {
+  cursor: pointer;
+}
+.flow-h2-result.is-clickable:hover,
+.flow-h2-result.is-open {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 14px oklch(0.65 0.18 35 / 0.35);
+}
 .flow-h2-result-value {
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.flow-h2-result-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: oklch(1 0 0 / 0.22);
+  flex-shrink: 0;
+}
+
+/* Popover — anchored below the pill, right-aligned so it extends leftward
+ * into the drawer body rather than off the right edge. Scrollable when
+ * the array is long. */
+.flow-h2-result-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  max-height: 360px;
+  overflow-y: auto;
+  background: oklch(1 0 0);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px oklch(0.16 0.02 260 / 0.18);
+  padding: 10px;
+  z-index: 5;
+  font-family: var(--mono);
+}
+.flow-h2-result-popover-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--line-2);
+  margin-bottom: 8px;
+}
+.flow-h2-result-popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flow-h2-result-popover-item {
+  font-size: 12px;
+  padding: 6px 8px;
+  background: oklch(0.97 0.005 260);
+  border-radius: 6px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.flow-h2-result-popover-scalar {
+  font-size: 12px;
+  padding: 6px 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 /* ── EntityOverlay header: ACL chip + esc, side-by-side ──────────────────── */

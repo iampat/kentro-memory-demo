@@ -1663,6 +1663,7 @@ function LineageFlow({
       resolverDetail={resolverDetail}
       reason={fval.reason}
       resultLabel={isKnown ? K.fmtFieldValue(fval) : "no winner"}
+      resultValue={isKnown ? fval.value : null}
       resultStatus={fval.status}
       entityType={entityType}
       fieldName={fieldName}
@@ -1912,6 +1913,104 @@ window.K.ResolverDrawer = function ResolverDrawer({ open, target, onClose, onApp
   );
 };
 
+// Result chip — the orange pill carrying the resolved value. Pill text is
+// hard-clamped to a single line with ellipsis so a long scalar (e.g. a
+// note subject) or an array preview can never blow out the column. When
+// the value is array-typed OR a string longer than ~28 chars, the pill
+// becomes clickable: click to open a popover that shows the full value
+// (arrays → one row per item; long scalars → wrapped+scrollable text).
+// Anchored below + right-aligned to the pill so it extends leftward into
+// the drawer body rather than overflowing the right rail.
+function ResultChip({ resultLabel, resultStatus, resultValue, innerRef }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  const isArray = Array.isArray(resultValue);
+  const arrayItems = isArray
+    ? resultValue.map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
+    : [];
+  const longScalar =
+    !isArray && typeof resultLabel === "string" && resultLabel.length > 28;
+  const isExpandable = isArray || longScalar;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      // Close just the popover; don't let lineage / drawer ESC fire too.
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+
+  return (
+    <div className="flow-h2-result-wrap" ref={wrapRef}>
+      <div
+        ref={innerRef}
+        className={K.cls(
+          "flow-h2-result",
+          `status-${resultStatus}`,
+          isExpandable && "is-clickable",
+          open && "is-open"
+        )}
+        onClick={isExpandable ? () => setOpen((o) => !o) : undefined}
+        role={isExpandable ? "button" : undefined}
+        tabIndex={isExpandable ? 0 : undefined}
+        title={isExpandable ? "click to expand" : undefined}
+        onKeyDown={
+          isExpandable
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpen((o) => !o);
+                }
+              }
+            : undefined
+        }
+      >
+        <span className="flow-h2-result-value">
+          {isArray ? arrayItems[0] || "[empty]" : resultLabel}
+        </span>
+        {isArray && arrayItems.length > 1 && (
+          <span className="flow-h2-result-count">+{arrayItems.length - 1}</span>
+        )}
+      </div>
+      {open && (
+        <div
+          className="flow-h2-result-popover"
+          role="dialog"
+          aria-label="Full resolved value"
+        >
+          <div className="flow-h2-result-popover-head">
+            {isArray ? `${arrayItems.length} VALUES` : "VALUE"}
+          </div>
+          {isArray ? (
+            <ul className="flow-h2-result-popover-list">
+              {arrayItems.map((s, i) => (
+                <li key={i} className="flow-h2-result-popover-item">
+                  {s}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="flow-h2-result-popover-scalar">{resultLabel}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Lays out CANDIDATES / RESOLVER / RESULT as three flex regions and draws
 // the connecting arcs as SVG paths underneath. After the DOM is measured,
 // every path runs from a card's right-middle to the resolver's left-middle
@@ -1927,6 +2026,7 @@ function LineageFlowLayout({
   resolverDetail,
   reason,
   resultLabel,
+  resultValue,
   resultStatus,
   entityType,
   fieldName,
@@ -2072,13 +2172,13 @@ function LineageFlowLayout({
             }}
             title={
               entityType && fieldName && onEditResolver
-                ? `click to edit resolver for ${entityType}.${fieldName}`
-                : undefined
+                ? `click to edit resolver for ${entityType}.${fieldName} — ${resolverName}`
+                : resolverName
             }
           >
             <div className="flow-h2-resolver-title">RESOLVE</div>
-            <div className="flow-h2-resolver-sub">{resolverName}</div>
           </div>
+          <div className="flow-h2-resolver-name">{resolverName}</div>
           <div className="flow-h2-resolver-detail">{resolverDetail}</div>
           {reason && <div className="flow-h2-resolver-reason">{reason}</div>}
         </div>
@@ -2087,12 +2187,12 @@ function LineageFlowLayout({
       <div className="flow-h2-col flow-h2-col-result">
         <div className="flow-h2-col-label">RESULT</div>
         <div className="flow-h2-col-body">
-          <div
-            ref={resultRef}
-            className={K.cls("flow-h2-result", `status-${resultStatus}`)}
-          >
-            <span className="flow-h2-result-value">{resultLabel}</span>
-          </div>
+          <ResultChip
+            innerRef={resultRef}
+            resultLabel={resultLabel}
+            resultValue={resultValue}
+            resultStatus={resultStatus}
+          />
         </div>
       </div>
 
@@ -2110,16 +2210,24 @@ function LineageFlowLayout({
             const winner = isWinner(cands[i]);
             const opacity = winner || !isKnown ? 1 : 0.35;
             const d = pathD(p);
-            const valueText = K.fmtCandidateValue(cands[i].value);
-            // Anchor the value chip just outside the card on the card's
-            // vertical centerline — keeps every chip horizontally aligned
-            // and visually tied to its source row rather than the resolver.
-            // Tucked close to the card (28px) so the resolver column has
-            // clear horizontal breathing room beyond it.
-            const chipX = p.x1 + 28;
+            const chip = K.formatCandidateChip(cands[i].value);
+            // Anchor labels just outside the card and let them grow rightward
+            // toward the resolver pill. Truncate each line to fit the actual
+            // available width on this row (card-right + 12 → pill-left − 8)
+            // so the chip never bleeds through the resolver. 11px mono ≈
+            // 6.5px per glyph, so floor(width / 6.5) is the char budget.
+            const chipX = p.x1 + 12;
             const chipY = p.y1;
+            const availableWidth = Math.max(40, p.x2 - p.x1 - 20);
+            const maxChars = Math.max(4, Math.floor(availableWidth / 6.5));
+            const fittedLines = chip.lines.map((ln) =>
+              ln.length > maxChars ? ln.slice(0, Math.max(1, maxChars - 1)) + "…" : ln
+            );
+            const lineHeight = 13;
+            const startY = chipY - ((fittedLines.length - 1) * lineHeight) / 2;
             return (
               <g key={i} opacity={opacity}>
+                <title>{chip.full}</title>
                 <path
                   d={d}
                   fill="none"
@@ -2130,31 +2238,25 @@ function LineageFlowLayout({
                 <circle r={4} fill={color.stroke}>
                   <animateMotion dur="1.6s" repeatCount="indefinite" path={d} />
                 </circle>
-                <g transform={`translate(${chipX}, ${chipY})`}>
-                  <rect
-                    x={-32}
-                    y={-11}
-                    width={64}
-                    height={20}
-                    rx={5}
-                    ry={5}
-                    fill="#fff"
-                    stroke={color.stroke}
-                    strokeWidth={1.2}
-                  />
+                {fittedLines.map((ln, j) => (
                   <text
-                    x={0}
-                    y={3}
-                    textAnchor="middle"
+                    key={j}
+                    x={chipX}
+                    y={startY + j * lineHeight}
+                    textAnchor="start"
                     dominantBaseline="middle"
                     fontFamily="var(--mono)"
                     fontSize="11"
-                    fontWeight="700"
+                    fontWeight={j === 0 ? "700" : "500"}
                     fill={color.text}
+                    stroke="#fff"
+                    strokeWidth="3.5"
+                    strokeLinejoin="round"
+                    style={{ paintOrder: "stroke" }}
                   >
-                    {valueText}
+                    {ln}
                   </text>
-                </g>
+                ))}
               </g>
             );
           })}

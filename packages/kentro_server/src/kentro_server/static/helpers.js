@@ -66,19 +66,75 @@ K.fmtFieldValue = function (fval) {
   }
 };
 
-// Compact one-liner for a candidate value rendered inside a chip — strings
-// stay un-quoted, numbers stay raw, anything else gets JSON.stringify. Long
-// values are clipped with an ellipsis so the chip doesn't blow out the
-// drawer width. Used by the lineage flow's CANDIDATES column.
-K.fmtCandidateValue = function (value) {
-  if (value === null || value === undefined) return "—";
-  let s;
-  if (typeof value === "string") s = value;
-  else if (typeof value === "number" || typeof value === "boolean") s = String(value);
-  else s = JSON.stringify(value);
-  if (s.length > 28) return s.slice(0, 26) + "…";
-  return s;
+// Type-aware presentation of a candidate value for the lineage flow's
+// candidate→resolver curve label. Returns:
+//   { lines: string[], full: string, kind: "text"|"number"|"dict"|"array"|"empty" }
+//
+// Strategy per type (matches the design discussion):
+//   number → render in full, with thousand separators when ≥ 1000
+//   text   → single-line truncation at ~22 chars (full text in <title>)
+//   array  → "[…N items]" inline (full content in <title>)
+//   dict   → up to 3 "key: value" lines, "+N more" if there's a tail
+//   empty  → em-dash
+//
+// The renderer (LineageFlowLayout) anchors text at textAnchor="start" so
+// chip width grows rightward toward the resolver, never leftward into
+// the candidate card.
+K.formatCandidateChip = function (value) {
+  if (value === null || value === undefined) {
+    return { lines: ["—"], full: "—", kind: "empty" };
+  }
+  if (typeof value === "number") {
+    const formatted =
+      Math.abs(value) >= 1000 && Number.isFinite(value)
+        ? value.toLocaleString("en-US")
+        : String(value);
+    return { lines: [formatted], full: formatted, kind: "number" };
+  }
+  if (typeof value === "boolean") {
+    const s = String(value);
+    return { lines: [s], full: s, kind: "number" };
+  }
+  if (typeof value === "string") {
+    const display = value.length > 24 ? value.slice(0, 22) + "…" : value;
+    return { lines: [display], full: value, kind: "text" };
+  }
+  if (Array.isArray(value)) {
+    const n = value.length;
+    const label = n === 0 ? "[empty]" : `[…${n} ${n === 1 ? "item" : "items"}]`;
+    return {
+      lines: [label],
+      full: JSON.stringify(value, null, 2),
+      kind: "array",
+    };
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value);
+    if (keys.length === 0) {
+      return { lines: ["{}"], full: "{}", kind: "dict" };
+    }
+    const maxLines = 3;
+    const lines = [];
+    for (let i = 0; i < Math.min(keys.length, maxLines); i++) {
+      const k = keys[i];
+      const v = value[k];
+      const vStr = typeof v === "string" ? v : JSON.stringify(v);
+      const display = vStr.length > 16 ? vStr.slice(0, 14) + "…" : vStr;
+      lines.push(`${k}: ${display}`);
+    }
+    if (keys.length > maxLines) {
+      lines.push(`+${keys.length - maxLines} more`);
+    }
+    return {
+      lines,
+      full: JSON.stringify(value, null, 2),
+      kind: "dict",
+    };
+  }
+  const s = String(value);
+  return { lines: [s], full: s, kind: "text" };
 };
+
 
 // Display-friendly version of a document filename: strip the `.md` suffix the
 // corpus uses but keep the stem intact. The on-disk label stays canonical;
