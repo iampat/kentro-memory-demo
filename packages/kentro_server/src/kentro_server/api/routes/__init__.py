@@ -7,6 +7,7 @@ from kentro_server.api.routes.events import router as events_router
 from kentro_server.api.routes.memory import router as memory_router
 from kentro_server.api.routes.rules import router as rules_router
 from kentro_server.api.routes.schema import router as schema_router
+from kentro_server.api.routes.viz import router as viz_router
 
 __all__ = [
     "demo_router",
@@ -16,4 +17,5 @@ __all__ = [
     "memory_router",
     "rules_router",
     "schema_router",
+    "viz_router",
 ]

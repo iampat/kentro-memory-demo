@@ -17,6 +17,7 @@ from kentro_server.api.routes import (
     memory_router,
     rules_router,
     schema_router,
+    viz_router,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "memory_router",
     "rules_router",
     "schema_router",
+    "viz_router",
 ]

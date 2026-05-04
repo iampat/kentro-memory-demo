@@ -105,7 +105,10 @@ window.K = window.K || {};
 
   async function _fetch(path, opts = {}) {
     const useAdmin = opts.elevateToAdmin === true;
-    const key = useAdmin ? getAdminKey() : getActiveKey();
+    // Explicit per-call override beats the acting-as default; this is how the
+    // prototype-style UI runs `Sales` and `Customer Service` panels side-by-
+    // side from the same React tree without flipping a global.
+    const key = opts.bearerKey || (useAdmin ? getAdminKey() : getActiveKey());
     if (!key) {
       throw new Error(
         `No bearer token available (acting=${getActingAs()}, elevate=${useAdmin}). Run K.api.bootstrap() first.`
@@ -152,6 +155,35 @@ window.K = window.K || {};
     return _fetch(
       `/entities/${encodeURIComponent(entity_type)}/${encodeURIComponent(entity_key)}`
     );
+  }
+
+  // Read an entity AS a specific agent (overrides the acting-as default).
+  // The prototype-style UI uses this to render Sales + Customer Service
+  // panels side-by-side from the same React tree.
+  async function readEntityAs(agent_id, entity_type, entity_key) {
+    const key = getKeyFor(agent_id);
+    if (!key) throw new Error(`no api key cached for agent_id=${agent_id}`);
+    return _fetch(
+      `/entities/${encodeURIComponent(entity_type)}/${encodeURIComponent(entity_key)}`,
+      { bearerKey: key }
+    );
+  }
+
+  async function listExtractionSteps(document_id) {
+    const r = await _fetch(`/documents/${encodeURIComponent(document_id)}/extraction-steps`);
+    return r.steps || [];
+  }
+
+  async function getViewAccessMatrix(entity_type) {
+    return _fetch(`/viz/access-matrix?entity_type=${encodeURIComponent(entity_type)}`);
+  }
+
+  async function getViewGraph() {
+    return _fetch("/viz/graph");
+  }
+
+  async function getRulesRendered() {
+    return _fetch("/rules/active/rendered");
   }
 
   async function listSchema() {
@@ -231,6 +263,11 @@ window.K = window.K || {};
     listDocuments,
     listEntities,
     readEntity,
+    readEntityAs,
+    listExtractionSteps,
+    getViewAccessMatrix,
+    getViewGraph,
+    getRulesRendered,
     listSchema,
     getRules,
     getStats,
