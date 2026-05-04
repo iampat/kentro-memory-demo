@@ -466,11 +466,48 @@ class GraphView(BaseModel):
     edges: tuple[GraphEdge, ...] = ()
 
 
+# === Catalog (toggleable demo events) ====================================
+#
+# `GET /catalog` returns the catalog as a flat list. Each event has a
+# stable `catalog_order` (display order in the catalog UI) and an optional
+# `activation_seq` (drives event-list display order + resolver tie-break).
+
+
+class CatalogEventView(BaseModel):
+    """One catalog event as exposed over the wire."""
+
+    model_config = ConfigDict(frozen=True)
+    id: str  # UUID as string for JSON friendliness
+    catalog_key: str
+    title: str
+    description: str | None = None
+    kind: str  # "ingest_document"
+    catalog_order: int
+    activation_seq: int | None = None
+    active: bool
+
+
+class CatalogListResponse(BaseModel):
+    """Response shape for `GET /catalog`."""
+
+    model_config = ConfigDict(frozen=True)
+    events: tuple[CatalogEventView, ...] = ()
+
+
+class ToggleEventResponse(BaseModel):
+    """Response shape for `POST /catalog/{id}/toggle` — the new state of the event."""
+
+    model_config = ConfigDict(frozen=True)
+    event: CatalogEventView
+
+
 __all__ = [
     "AccessMatrixCellView",
     "AccessMatrixView",
     "Agent",
     "AutoResolverSpec",
+    "CatalogEventView",
+    "CatalogListResponse",
     "Conflict",
     "ConflictRule",
     "DocumentListResponse",
@@ -504,6 +541,7 @@ __all__ = [
     "Rule",
     "RuleSet",
     "SkillResolverSpec",
+    "ToggleEventResponse",
     "WriteResult",
     "WriteRule",
     "WriteStatus",

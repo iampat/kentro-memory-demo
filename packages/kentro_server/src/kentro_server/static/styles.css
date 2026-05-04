@@ -86,28 +86,6 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   border-radius: 6px;
   box-shadow: 0 0 0 1px oklch(0 0 0 / 0.08), 0 2px 6px oklch(0 0 0 / 0.12);
 }
-.scene-stepper { display: flex; gap: 4px; margin-left: 24px; padding: 3px; background: var(--bg-3); border-radius: 8px; }
-.scene-stepper button {
-  background: transparent; border: none;
-  padding: 5px 12px;
-  font-family: var(--sans);
-  font-weight: 500;
-  font-size: 11px;
-  color: var(--ink-2);
-  cursor: pointer;
-  letter-spacing: 0.02em;
-  border-radius: 5px;
-  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-.scene-stepper button.active {
-  background: linear-gradient(180deg, var(--ink), oklch(0.22 0.02 260));
-  color: var(--bg);
-  box-shadow: 0 2px 6px oklch(0.16 0.02 260 / 0.2), 0 1px 0 oklch(1 0 0 / 0.1) inset;
-}
-.scene-stepper button:hover:not(.active) {
-  background: oklch(1 0 0 / 0.6);
-  color: var(--ink);
-}
 .spacer { flex: 1; }
 .rule-chip {
   font-family: var(--mono);
@@ -130,12 +108,6 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   0%, 100% { box-shadow: 0 0 0 3px var(--accent-glow); }
   50% { box-shadow: 0 0 0 6px oklch(0.55 0.18 255 / 0.1); }
 }
-.tenant-chip {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink-3);
-}
-
 /* Main grid */
 .main {
   display: grid;
@@ -1724,4 +1696,155 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   margin-left: auto;
   font-size: 10px;
   color: var(--ink-3);
+}
+
+/* === EventRail panel ===================================================== */
+/* Two-column layout: catalog left, "in play" right. Cross-list move is just a
+   re-render — the catalog row dims in place when active so the viewer's spatial
+   memory ("the email is the third entry") holds. */
+
+.event-rail .panel-body {
+  padding: 0;
+}
+.event-rail-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 100%;
+}
+.event-rail-col {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+.event-rail-col:last-child { border-right: none; }
+.event-rail-col-active {
+  background: linear-gradient(180deg, oklch(0.985 0.005 260), oklch(0.97 0.008 260));
+}
+.event-rail-col-head {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--line);
+  background: oklch(0.99 0.005 260 / 0.7);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.event-rail-empty {
+  padding: 14px;
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.event-rail-empty code {
+  font-family: var(--mono);
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.event-rail-error { color: var(--bad); }
+
+.event-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid oklch(0.95 0.005 260);
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink);
+  transition:
+    background 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    filter 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.event-rail-row-busy { opacity: 0.5; pointer-events: none; }
+.event-rail-row-icon { font-size: 16px; }
+.event-rail-row-text { flex: 1; min-width: 0; }
+.event-rail-row-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.event-rail-row-desc {
+  font-size: 10px;
+  color: var(--ink-3);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.event-rail-row-action {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.event-rail-row-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.event-rail-row-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.event-rail-row-action-remove {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.event-rail-row-action-remove:hover:not(:disabled) {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* Catalog row — dims in place when active. */
+.event-rail-row-catalog.event-rail-row-dimmed {
+  opacity: 0.55;
+  filter: saturate(0.5);
+  background: linear-gradient(90deg, oklch(0.98 0.01 260 / 0.5), transparent);
+}
+.event-rail-row-badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+/* Active row — sequence chip on the left so the activation order is visible. */
+.event-rail-row-active {
+  animation: event-rail-row-enter 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.event-rail-row-seq {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 6px;
+  border-radius: 4px;
+  min-width: 24px;
+  text-align: center;
+}
+@keyframes event-rail-row-enter {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
 }

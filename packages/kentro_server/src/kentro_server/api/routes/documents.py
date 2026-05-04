@@ -12,15 +12,16 @@ from kentro.types import (
     ExtractionStepView,
     IngestionResult,
 )
+from sqlalchemy import or_
 from sqlmodel import col, select
 
 from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep
 from kentro_server.api.dtos import IngestRequest
+from kentro_server.core.catalog import activate_event, register_ingest_event
 from kentro_server.core.rules import load_active_ruleset
 from kentro_server.core.source_removal import remove_document
-from kentro_server.extraction import ingest_document
-from kentro_server.store.models import DocumentRow, ExtractionStepRow, FieldWriteRow
+from kentro_server.store.models import DocumentRow, EventRow, ExtractionStepRow, FieldWriteRow
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +30,30 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 @router.get("", response_model=DocumentListResponse)
 def list_documents(principal: PrincipalDep) -> DocumentListResponse:
-    """List every document in the tenant — used by the demo UI's source pane.
+    """List every LIVE document in the tenant — used by the demo UI's source pane.
+
+    Documents whose owning catalog event is currently inactive are filtered out:
+    toggling an ingestion event off removes the doc from the panel without
+    losing the underlying rows. Documents with NULL `event_id` (legacy /
+    admin-direct ingests) always show.
 
     Not ACL-filtered today: documents are tenant-scoped (any agent on the tenant
-    sees the full list). The fields returned are metadata only (label, source
-    class, hash) — never the blob contents. Per-document blob fetch + per-write
-    permissions still gate access to derived field data.
+    sees the full list). Per-document blob fetch + per-write permissions still
+    gate access to derived field data.
     """
     summaries: list[DocumentSummary] = []
     with principal.store.session() as session:
-        rows = session.exec(select(DocumentRow).order_by(col(DocumentRow.created_at).desc())).all()
+        rows = session.exec(
+            select(DocumentRow)
+            .join(EventRow, isouter=True)
+            .where(
+                or_(
+                    col(DocumentRow.event_id).is_(None),
+                    col(EventRow.active).is_(True),
+                )
+            )
+            .order_by(col(DocumentRow.created_at).desc())
+        ).all()
         for row in rows:
             field_writes = session.exec(
                 select(FieldWriteRow).where(FieldWriteRow.source_document_id == row.id)
@@ -65,19 +80,62 @@ def ingest(
     llm: LLMClientDep,
     settings: SettingsDep,
 ) -> IngestionResult:
-    """Ingest one document. The authenticated agent is recorded as the writer."""
+    """Ingest one document via the catalog so it stays toggleable.
+
+    Every ingest registers an `EventRow` (catalog_key = `ad-hoc:<label>`) and
+    activates it — first activation runs the LLM extraction and tags every
+    created row with `event_id`. The viewer can later toggle the event off
+    in the UI to "remove" the document from the world without losing the
+    underlying rows. Re-posting the same label is a no-op past the first
+    activation (the catalog entry is keyed on label).
+
+    Ad-hoc events get `catalog_order >= 1000` so the demo author's
+    hand-curated seed order stays at the top of the catalog UI.
+    """
     ruleset = load_active_ruleset(principal.store)
-    return ingest_document(
-        store=principal.store,
-        llm=llm,
-        content=body.content.encode("utf-8"),
-        label=body.label,
-        registered_schemas=schema.list_all(),
-        written_by_agent_id=principal.agent_id,
-        rule_version=ruleset.version,
-        smart_model=body.smart_model or settings.kentro_llm_smart_model,
+    label = body.label or "untitled"
+    event = register_ingest_event(
+        principal.store,
+        catalog_key=f"ad-hoc:{label}",
+        title=label,
+        description=None,
+        content=body.content,
+        label=label,
         source_class=body.source_class,
+        catalog_order=_next_ad_hoc_catalog_order(principal.store),
     )
+    _, result = activate_event(
+        principal.store,
+        schema=schema,
+        llm=llm,
+        smart_model=body.smart_model or settings.kentro_llm_smart_model,
+        rule_version=ruleset.version,
+        written_by_agent_id=principal.agent_id,
+        event_id=event.id,
+    )
+    if result is None:
+        # Catalog entry already existed and had been activated before — no new
+        # extraction this turn. Tell the caller plainly.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"document with label {label!r} was previously ingested as catalog "
+                f"event {event.id}; toggle it from the UI instead of re-posting"
+            ),
+        )
+    return result
+
+
+def _next_ad_hoc_catalog_order(store) -> int:
+    """Push ad-hoc ingests below the seeded catalog entries. Counts from 1000+
+    so the demo's hand-curated order (1..N) renders at the top."""
+    with store.session() as session:
+        existing = session.exec(
+            select(EventRow.catalog_order).where(EventRow.catalog_order >= 1000)
+        ).all()
+    if not existing:
+        return 1000
+    return max(existing) + 1
 
 
 @router.get("/{document_id}/extraction-steps", response_model=ExtractionStepListResponse)

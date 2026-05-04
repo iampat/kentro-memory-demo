@@ -19,9 +19,11 @@ from kentro.types import (
     WriteRule,
 )
 from rich.console import Console
+from starlette.types import Scope
 
 from kentro_server import __version__
 from kentro_server.api import (
+    catalog_router,
     demo_router,
     documents_router,
     entities_router,
@@ -48,6 +50,23 @@ from kentro_server.store import TenantRegistry
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles that disables browser caching for the demo bundle.
+
+    The UI ships as raw `.jsx` compiled in-browser by Babel, so any cached
+    asset masks the on-disk edits we just made. `no-store` forces the browser
+    to refetch on every load — fine for a localhost dev demo, would be wrong
+    for a CDN.
+    """
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
 
 class _LazyMcpMount:
@@ -193,6 +212,7 @@ app.include_router(memory_router)
 app.include_router(demo_router)
 app.include_router(events_router)
 app.include_router(viz_router)
+app.include_router(catalog_router)
 
 # Mount the lazy delegator; lifespan attaches the real MCP sub-app each cycle.
 app.mount("/mcp", _mcp_mount)
@@ -258,7 +278,7 @@ def llm_stats(client: LLMClientDep) -> dict:
 # the behavior we want for an SPA-style static bundle.
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 if _STATIC_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="ui")
+    app.mount("/", NoCacheStaticFiles(directory=_STATIC_DIR, html=True), name="ui")
 else:
     logger.warning(
         "static UI directory missing at %s — `/` will 404. Run `git pull` or "

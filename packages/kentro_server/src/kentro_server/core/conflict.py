@@ -31,10 +31,15 @@ def record_field_write(
     rule_version_at_write: int,
     source_document_id: UUID | None = None,
     extraction_step_id: UUID | None = None,
+    event_id: UUID | None = None,
 ) -> tuple[FieldWriteRow, ConflictRow | None]:
     """Persist a new write and (if it disagrees with existing live writes) ensure an open ConflictRow.
 
     Returns `(new_write_row, conflict_row_or_None)`. Caller commits the session.
+
+    `event_id`, when set, ties the write (and any conflict it triggers) to a
+    catalog `EventRow` so that toggling the event off filters the write out
+    of reads — see `kentro_server.core.read`.
     """
     write = FieldWriteRow(
         entity_id=entity_id,
@@ -46,6 +51,7 @@ def record_field_write(
         source_document_id=source_document_id,
         rule_version_at_write=rule_version_at_write,
         extraction_step_id=extraction_step_id,
+        event_id=event_id,
     )
     session.add(write)
     # Flush so the new row is visible to the conflict-detection query in this transaction.
@@ -74,7 +80,7 @@ def record_field_write(
     if open_conflict is not None:
         return write, open_conflict
 
-    new_conflict = ConflictRow(entity_id=entity_id, field_name=field_name)
+    new_conflict = ConflictRow(entity_id=entity_id, field_name=field_name, event_id=event_id)
     session.add(new_conflict)
     session.flush()
     return write, new_conflict

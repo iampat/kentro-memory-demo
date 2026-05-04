@@ -31,12 +31,13 @@ from kentro.types import (
     GraphView,
 )
 from kentro.viz import access_matrix as compute_access_matrix
+from sqlalchemy import or_
 from sqlmodel import col, select
 
 from kentro_server.api.auth import PrincipalDep
 from kentro_server.api.deps import SchemaRegistryDep, TenantRegistryDep
 from kentro_server.core.rules import load_active_ruleset
-from kentro_server.store.models import DocumentRow, EntityRow, FieldWriteRow
+from kentro_server.store.models import DocumentRow, EntityRow, EventRow, FieldWriteRow
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +108,32 @@ def get_graph(principal: PrincipalDep) -> GraphView:
     """
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
+    # The graph reflects the LIVE world: documents and writes whose owning
+    # catalog event has been toggled off are filtered out so the picture
+    # matches what the AgentPanels and the matrix show. NULL event_id is
+    # always live.
     with principal.store.session() as session:
-        docs = session.exec(select(DocumentRow)).all()
+        docs = session.exec(
+            select(DocumentRow)
+            .join(EventRow, isouter=True)
+            .where(
+                or_(
+                    col(DocumentRow.event_id).is_(None),
+                    col(EventRow.active).is_(True),
+                )
+            )
+        ).all()
         ents = session.exec(select(EntityRow)).all()
         writes = session.exec(
-            select(FieldWriteRow).where(col(FieldWriteRow.source_document_id).is_not(None))
+            select(FieldWriteRow)
+            .join(EventRow, isouter=True)
+            .where(
+                col(FieldWriteRow.source_document_id).is_not(None),
+                or_(
+                    col(FieldWriteRow.event_id).is_(None),
+                    col(EventRow.active).is_(True),
+                ),
+            )
         ).all()
         ent_by_id = {e.id: e for e in ents}
         for d in docs:

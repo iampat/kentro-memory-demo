@@ -249,6 +249,23 @@ window.K = window.K || {};
     return _fetch("/demo/seed", { method: "POST", elevateToAdmin: true });
   }
 
+  // Toggleable-event catalog. The world is the union of active events; reads
+  // filter writes/docs by the owning event's `active` flag, so toggling an
+  // event off cleanly removes its evidence from every panel.
+  async function listCatalog() {
+    const r = await _fetch("/catalog");
+    return r.events || [];
+  }
+
+  // Admin-elevated: toggling can drive an LLM call (first activation) and
+  // changes what every other agent sees.
+  async function toggleCatalogEvent(event_id) {
+    return _fetch(`/catalog/${encodeURIComponent(event_id)}/toggle`, {
+      method: "POST",
+      elevateToAdmin: true,
+    });
+  }
+
   // ── Public surface ────────────────────────────────────────────────────────
 
   K.api = {
@@ -278,6 +295,8 @@ window.K = window.K || {};
     ingestDocument,
     deleteDocument,
     seedDemo,
+    listCatalog,
+    toggleCatalogEvent,
     // low-level escape hatch
     _fetch,
   };

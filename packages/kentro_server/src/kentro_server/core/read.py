@@ -22,6 +22,7 @@ from kentro.types import (
     ResolverSpec,
     RuleSet,
 )
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
@@ -39,6 +40,7 @@ from kentro_server.store import TenantStore
 from kentro_server.store.models import (
     ConflictRow,
     EntityRow,
+    EventRow,
     FieldWriteRow,
     SkillActionExecutionRow,
 )
@@ -112,19 +114,29 @@ def read_entity(
             )
         ).first()
         live_writes_by_field: dict[str, list[FieldWriteRow]] = {}
+        seq_by_write_id: dict = {}
         if entity_row is not None:
-            all_writes = list(
-                session.exec(
-                    select(FieldWriteRow)
-                    .where(
-                        FieldWriteRow.entity_id == entity_row.id,
-                        ~col(FieldWriteRow.superseded),
-                    )
-                    .order_by(col(FieldWriteRow.written_at))
-                ).all()
-            )
-            for w in all_writes:
-                live_writes_by_field.setdefault(w.field_name, []).append(w)
+            # LEFT JOIN through event so writes whose owning catalog event has
+            # been toggled OFF disappear from reads. NULL event_id is "always
+            # live" (admin-direct writes, manual /entities writes).
+            joined = session.exec(
+                select(FieldWriteRow, EventRow)
+                .join(EventRow, isouter=True)
+                .where(
+                    FieldWriteRow.entity_id == entity_row.id,
+                    ~col(FieldWriteRow.superseded),
+                    or_(
+                        col(FieldWriteRow.event_id).is_(None),
+                        col(EventRow.active).is_(True),
+                    ),
+                )
+                .order_by(col(FieldWriteRow.written_at))
+            ).all()
+            for write, event in joined:
+                live_writes_by_field.setdefault(write.field_name, []).append(write)
+                # NULL event_id ranks above every catalog event so admin-direct
+                # writes remain "newest" regardless of toggle order.
+                seq_by_write_id[write.id] = event.activation_seq if event is not None else None
 
     fields: dict[str, FieldValue] = {}
     for field_def in type_def.fields:
@@ -155,6 +167,7 @@ def read_entity(
             entity_type=entity_type,
             field_name=field_name,
             llm=llm,
+            tie_break_seq_by_write_id=seq_by_write_id,
         )
         fields[field_name] = _to_field_value(resolved)
 
