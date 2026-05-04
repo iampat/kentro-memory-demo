@@ -219,23 +219,29 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 }
 .source-overlay-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 18px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
 }
 .source-overlay-head .title {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-2);
 }
 .source-overlay-head button {
   background: transparent; border: 1px solid var(--line);
-  padding: 2px 8px;
-  font-family: var(--mono); font-size: 11px;
+  padding: 6px 12px;
+  font-family: var(--mono); font-size: 13px;
+  letter-spacing: 0.04em;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
+  transition: background 120ms, border-color 120ms;
+}
+.source-overlay-head button:hover {
+  background: var(--bg-3);
+  border-color: var(--ink-3);
 }
 .source-overlay-body {
   flex: 1;
@@ -271,23 +277,24 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .entity-type-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: 4px 10px;
   font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink);
   background: var(--bg-3);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 .entity-key-text {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--ink-2);
   letter-spacing: 0.04em;
   text-transform: none;
+  font-weight: 500;
 }
 
 /* Entity overlay — global + per-agent comparison cards stacked vertically. */
@@ -1288,7 +1295,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .drawer {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: 520px;
+  width: 720px;
   background: linear-gradient(180deg, oklch(0.99 0.005 260), oklch(0.97 0.01 260));
   border-left: 1px solid var(--line);
   z-index: 101;
@@ -1310,17 +1317,31 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
  * over so any caller still passing `shifted` is harmless. */
 .drawer.shifted { right: 440px; z-index: 202; }
 .drawer.shifted.open { transform: translateX(0); }
-/* Deeper slot — sits one drawer further left of the LineageDrawer (which is
- * pinned at right: 440px with width 520px), so its right edge meets the
- * lineage drawer's left edge at viewport-960. Narrower than the lineage
- * drawer because the resolver form is small. Slightly higher z-index so the
- * left-edge shadow sits above the lineage drawer's right edge. */
+/* Deep slot — sits one drawer to the LEFT of LineageDrawer (which is pinned
+ * at right: 440px with width 720px), so its right edge meets the lineage
+ * drawer's left edge at viewport-1160. Used by SourceDrawer (when a
+ * candidate card is clicked) and ResolverDrawer (when the chip is clicked);
+ * those two are mutex with each other.
+ *
+ * Closed state quirk: a plain `translateX(100%)` only shifts the drawer by
+ * its own width — at right:1160 that leaves the closed drawer parked over
+ * the lineage drawer behind it, creating a ghost panel. Fix: drop z-index
+ * BELOW lineage (101) when closed so the slide-out animates *behind* the
+ * lineage drawer's opaque body. Z-index flips back to 102 the moment the
+ * .open class returns, so opening overlaps lineage. */
 .drawer.drawer-deep {
-  right: 960px;
+  right: 1160px;
   width: 380px;
+  z-index: 100;
+}
+.drawer.drawer-deep.open {
+  transform: translateX(0);
   z-index: 102;
 }
-.drawer.drawer-deep.open { transform: translateX(0); }
+/* SourceDrawer needs more horizontal room than the resolver form. */
+.drawer.drawer-deep.drawer-deep-wide {
+  width: 480px;
+}
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
@@ -2350,11 +2371,12 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   align-items: stretch;
   justify-content: space-between;
   gap: 0;
-  padding: 22px 8px 14px;
+  padding: 32px 16px 24px;
+  min-height: 480px;
 }
-.flow-h2-col-cands { width: 180px; flex-shrink: 0; }
-.flow-h2-col-resolver { flex-shrink: 0; }
-.flow-h2-col-result { flex-shrink: 0; }
+.flow-h2-col-cands { width: 200px; flex-shrink: 0; }
+.flow-h2-col-resolver { flex-shrink: 0; min-width: 140px; }
+.flow-h2-col-result { flex-shrink: 0; min-width: 100px; }
 .flow-h2-svg {
   position: absolute;
   inset: 0;
@@ -2382,7 +2404,7 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .flow-h2-col-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   flex: 1;
   justify-content: center;
 }
@@ -2406,6 +2428,13 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 }
 .flow-h2-cand.is-winner {
   box-shadow: 0 0 0 1px currentColor, var(--shadow-sm);
+}
+.flow-h2-cand.is-clickable {
+  cursor: pointer;
+}
+.flow-h2-cand.is-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md, 0 4px 10px oklch(0.16 0.02 260 / 0.18));
 }
 .flow-h2-cand-icon {
   font-size: 14px;
@@ -2504,24 +2533,30 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 .entity-overlay-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-.entity-overlay-acl-chip {
+.source-overlay-head button.entity-overlay-acl-chip {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid var(--accent);
-  background: var(--accent-glow);
-  color: var(--accent);
-  cursor: pointer;
-  transition: background 120ms, color 120ms;
-}
-.entity-overlay-acl-chip:hover {
+  letter-spacing: 0.08em;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1.5px solid var(--accent);
   background: var(--accent);
   color: oklch(0.99 0 0);
+  cursor: pointer;
+  box-shadow: 0 1px 3px oklch(0.16 0.02 260 / 0.18);
+  transition: background 120ms, transform 120ms, box-shadow 120ms;
+}
+.source-overlay-head button.entity-overlay-acl-chip:hover {
+  background: oklch(from var(--accent) calc(l - 0.04) c h);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px oklch(0.16 0.02 260 / 0.24);
+}
+.source-overlay-head button.entity-overlay-acl-chip:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px oklch(0.16 0.02 260 / 0.18);
 }
 
 /* ── PolicyOverlay — type-scoped Access matrix + Rules + NL editor ──────────
