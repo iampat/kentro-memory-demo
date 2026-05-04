@@ -23,9 +23,11 @@ from kentro.types import (
 )
 from sqlmodel import col, select
 
+from kentro_server.core.events import Event, EventBus
 from kentro_server.core.resolve import resolve
 from kentro_server.core.schema_registry import SchemaRegistry
-from kentro_server.skills.llm_client import LLMClient
+from kentro_server.core.write import write_field
+from kentro_server.skills.llm_client import LLMClient, NotifyAction, WriteEntityAction
 from kentro_server.store import TenantStore
 from kentro_server.store.models import EntityRow, FieldWriteRow
 
@@ -42,6 +44,7 @@ def read_entity(
     entity_key: str,
     resolver: ResolverSpec,
     llm: LLMClient,
+    event_bus: EventBus | None = None,
 ) -> EntityRecord:
     """Build the EntityRecord an agent sees for `(entity_type, entity_key)`.
 
@@ -143,7 +146,75 @@ def read_entity(
         )
         fields[field_name] = _to_field_value(resolved)
 
+        # PR 10-5: workflow-aware Skills. If the resolver decision carried
+        # actions, execute each through the same governance gate as a regular
+        # write/read. Skills cannot bypass ACL — `write_field()` re-evaluates.
+        if resolved.actions:
+            _execute_actions(
+                actions=resolved.actions,
+                store=store,
+                schema=schema,
+                acting_agent_id=agent_id,
+                event_bus=event_bus,
+            )
+
     return EntityRecord(entity_type=entity_type, key=entity_key, fields=fields)
+
+
+def _execute_actions(
+    *,
+    actions,
+    store: TenantStore,
+    schema: SchemaRegistry,
+    acting_agent_id: str,
+    event_bus: EventBus | None,
+) -> None:
+    """Walk SkillResolverDecision.actions; execute each through the ACL gate.
+
+    Best-effort with logging; one failed action does not abort the others.
+    A WriteEntityAction calls `write_field` directly (which re-evaluates ACL
+    for the acting agent — no escape hatch). A NotifyAction publishes onto
+    the EventBus when one is wired; logs only when not.
+    """
+    for action in actions:
+        if isinstance(action, WriteEntityAction):
+            try:
+                result = write_field(
+                    store=store,
+                    schema=schema,
+                    agent_id=acting_agent_id,
+                    entity_type=action.entity_type,
+                    entity_key=action.entity_key,
+                    field_name=action.field_name,
+                    value_json=action.value_json,
+                )
+                logger.info(
+                    "skill action: WriteEntity %s/%s.%s → %s",
+                    action.entity_type,
+                    action.entity_key,
+                    action.field_name,
+                    result.status.value,
+                )
+            except Exception:
+                logger.exception("skill action WriteEntity failed: %r", action)
+        elif isinstance(action, NotifyAction):
+            try:
+                logger.info("skill notify %s: %s", action.channel, action.message)
+                if event_bus is not None:
+                    event_bus.publish(
+                        Event(
+                            kind="notify",
+                            tenant_id=store.tenant_id,
+                            payload={
+                                "channel": action.channel,
+                                "message": action.message,
+                            },
+                        )
+                    )
+            except Exception:
+                logger.exception("skill action Notify failed: %r", action)
+        else:
+            logger.warning("skill action: unknown type %s — dropping", type(action).__name__)
 
 
 def _to_field_value(resolved) -> FieldValue:

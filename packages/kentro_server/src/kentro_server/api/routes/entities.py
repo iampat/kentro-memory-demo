@@ -23,7 +23,7 @@ from kentro.types import (
 from sqlmodel import col, select
 
 from kentro_server.api.auth import PrincipalDep
-from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep
+from kentro_server.api.deps import EventBusDep, LLMClientDep, SchemaRegistryDep
 from kentro_server.api.dtos import ReadRequest, WriteRequest
 from kentro_server.core.read import read_entity
 from kentro_server.core.rules import load_active_ruleset
@@ -83,6 +83,7 @@ def get_entity(
     principal: PrincipalDep,
     schema: SchemaRegistryDep,
     llm: LLMClientDep,
+    event_bus: EventBusDep,
 ) -> EntityRecord:
     """Default-resolver read (AutoResolver). For SkillResolver / etc., POST /read."""
     ruleset = load_active_ruleset(principal.store)
@@ -95,6 +96,7 @@ def get_entity(
         entity_key=entity_key,
         resolver=AutoResolverSpec(),
         llm=llm,
+        event_bus=event_bus,
     )
 
 
@@ -106,6 +108,7 @@ def read(
     principal: PrincipalDep,
     schema: SchemaRegistryDep,
     llm: LLMClientDep,
+    event_bus: EventBusDep,
 ) -> EntityRecord:
     """Read with an explicit ResolverSpec (raw / latest_write / prefer_agent / skill / auto)."""
     ruleset = load_active_ruleset(principal.store)
@@ -118,6 +121,7 @@ def read(
         entity_key=entity_key,
         resolver=body.resolver,
         llm=llm,
+        event_bus=event_bus,
     )
 
 

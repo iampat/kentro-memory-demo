@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from kentro_server.api.auth import Principal, current_principal
+from kentro_server.core.events import EventBus
 from kentro_server.core.schema_registry import SchemaRegistry
 from kentro_server.settings import Settings
 from kentro_server.skills.llm_client import LLMClient
@@ -27,6 +28,10 @@ def get_tenant_registry(request: Request) -> TenantRegistry:
     return request.app.state.tenant_registry
 
 
+def get_event_bus(request: Request) -> EventBus:
+    return request.app.state.event_bus
+
+
 def get_schema_registry(
     principal: Annotated[Principal, Depends(current_principal)],
 ) -> SchemaRegistry:
@@ -38,13 +43,16 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 TenantRegistryDep = Annotated[TenantRegistry, Depends(get_tenant_registry)]
 SchemaRegistryDep = Annotated[SchemaRegistry, Depends(get_schema_registry)]
+EventBusDep = Annotated[EventBus, Depends(get_event_bus)]
 
 
 __all__ = [
+    "EventBusDep",
     "LLMClientDep",
     "SchemaRegistryDep",
     "SettingsDep",
     "TenantRegistryDep",
+    "get_event_bus",
     "get_llm_client",
     "get_schema_registry",
     "get_settings",

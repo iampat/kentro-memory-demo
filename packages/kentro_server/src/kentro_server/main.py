@@ -25,10 +25,12 @@ from kentro_server.api import (
     demo_router,
     documents_router,
     entities_router,
+    events_router,
     memory_router,
     rules_router,
     schema_router,
 )
+from kentro_server.core.events import EventBus
 from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
 from kentro_server.mcp_server import AuthMiddleware, build_mcp
 from kentro_server.settings import Settings
@@ -144,6 +146,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = None
     app.state.llm_client = None
     app.state.tenant_registry = None
+    app.state.event_bus = None
     mcp = None
     try:
         settings = Settings()
@@ -154,6 +157,7 @@ async def lifespan(app: FastAPI):
             config_path=settings.kentro_tenants_json,
         )
         app.state.tenant_registry = registry
+        app.state.event_bus = EventBus()
         _enforce_demo_key_opt_in(registry, allow_demo_keys=settings.kentro_allow_demo_keys)
         # Fresh FastMCP per lifespan cycle (see _LazyMcpMount docstring).
         mcp = build_mcp()
@@ -179,6 +183,7 @@ app.include_router(rules_router)
 app.include_router(schema_router)
 app.include_router(memory_router)
 app.include_router(demo_router)
+app.include_router(events_router)
 
 # Mount the lazy delegator; lifespan attaches the real MCP sub-app each cycle.
 app.mount("/mcp", _mcp_mount)

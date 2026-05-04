@@ -359,7 +359,11 @@ Bundles the deferred codex 3-finding fix (since Stage A immediately starts depen
 
 **Verification:** `git grep KENTRO_DATA` returns zero hits; `task reset && task dev` shows the empty UI with the seed button; clicking seed populates the tenant and re-renders without page reload; deleting `static/data.js` from disk doesn't break anything.
 
-#### PR 10-5 — Workflow-aware Skills
+#### PR 10-5 — Workflow-aware Skills — **DONE (server plumbing + UI; LLM prompt update deferred)**
+
+**Built:** `SkillResolverDecision.actions` (`WriteEntityAction` + `NotifyAction` discriminated union); `ResolvedFieldValue.actions` propagation through `core/resolve.py`; `core/read.py::_execute_actions` walks them and dispatches WriteEntity through `write_field()` (ACL re-evaluated — Skills cannot bypass) and Notify through the EventBus. New `core/events.py::EventBus` (asyncio-queue fan-out, tenant-scoped, attached to `app.state.event_bus` in the lifespan). New `GET /events` SSE route (bearer-authed, tenant-filtered, 30s heartbeat). New `static/escalation-toast.jsx` `<EscalationToast>` mounted in App: subscribes via `fetch()` (EventSource can't carry Auth), parses SSE blocks, renders fade-in toasts for `notify` events with auto-dismiss after 6s. Reconnects on agent switch. **Skill prompt update** (so the LLM actually emits actions) is deferred to PR 11 — the plumbing here ensures end-to-end flow once the prompt asks for actions. The deferred memory note `pending_workflow_aware_skills.md` is closed by this PR.
+
+#### PR 10-5 — original scope outline (kept for reference)
 
 - Server: extend `SkillResolverDecision` (in `skills/llm_client.py`) with `actions: tuple[SkillAction, ...] = ()`. `SkillAction` is a discriminated union: `WriteEntityAction(entity_type, entity_key, field_name, value_json)` and `NotifyAction(channel, message)`.
 - `core/resolve.py`: after a `SkillResolver` returns its decision, walk `actions` and execute each. `WriteEntityAction` goes through `write_field()` (so the same ACL gate applies — Skills cannot bypass governance). `NotifyAction` for v0 = console log + websocket event broadcast on `/ws/events`.

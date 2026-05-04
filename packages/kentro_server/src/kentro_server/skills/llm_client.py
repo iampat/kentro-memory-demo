@@ -27,7 +27,7 @@ backed by real Providers.
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,22 +51,52 @@ class LLMOfflineError(RuntimeError):
 # === Structured outputs ===
 
 
+class WriteEntityAction(BaseModel):
+    """One workflow action: create or update an entity (e.g. a Ticket)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["write_entity"] = "write_entity"
+    entity_type: str = Field(description="Must be a registered entity type.")
+    entity_key: str = Field(description="Canonical key.")
+    field_name: str = Field(description="Field on entity_type to write.")
+    value_json: str = Field(description="JSON-encoded value.")
+
+
+class NotifyAction(BaseModel):
+    """One workflow action: emit a notification (UI toast for v0; Slack later)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["notify"] = "notify"
+    channel: str = Field(description="e.g. '#deals-review' or 'sales-lead@kentro.demo'.")
+    message: str = Field(description="Human-readable message.")
+
+
+SkillAction = WriteEntityAction | NotifyAction
+
+
 class SkillResolverDecision(BaseModel):
     """Output of a SkillResolver LLM call.
 
-    TODO(workflow-aware-skills, planned for pre-Step-10): add an optional
-    `actions: tuple[SkillAction, ...] = ()` field so a Skill can emit
-    workflow steps alongside its winner pick — e.g.
-        {type: "write_entity", entity_type: "Ticket", fields: {...}}
-        {type: "notify",       channel: "#deals-review", message: "..."}
-    The orchestrator in `core/resolve.py` will execute each action through
-    the same ACL gate as a regular write (Skills cannot bypass governance).
-    This is the "memory is the workflow trigger" demo beat — it's how the
-    Scene 4 SkillResolver also creates Ticket #142 + fires the toast.
-    Tracked in IMPLEMENTATION_PLAN.md "Deferred to the very end" and
-    cross-referenced from demo.md / implementation-handoff.md / memory.md.
-    Must land BEFORE Step 10 begins; UI's <TicketBadge> + <EscalationToast>
-    components depend on this server-side surface.
+    Beyond the winner pick (`chosen_value_json` + `reason`), a Skill can emit
+    `actions: tuple[SkillAction, ...]` — workflow steps the resolver wants
+    executed AFTER the pick lands. Two action types in v0:
+
+      WriteEntityAction(entity_type, entity_key, field_name, value_json)
+        → goes through the same `write_field` ACL gate as a regular write.
+        Skills CANNOT bypass governance; if the (acting) agent doesn't have
+        write permission on the target field, the action is dropped (the
+        decision still applies; only the side effect is gated).
+
+      NotifyAction(channel, message)
+        → for v0: console-log + websocket event broadcast on `/ws/events` so
+        the UI's <EscalationToast> can render it. Real Slack integration is
+        v0.1.
+
+    This is the "memory is the workflow trigger" demo beat — Scene 4's
+    SkillResolver picks the email's $300K AND creates Ticket #142 AND notifies
+    sales-lead, all from one decision.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -76,6 +106,10 @@ class SkillResolverDecision(BaseModel):
     )
     reason: str = Field(
         description="When chosen_value_json is set: the reasoning. When null: why the skill cannot decide.",
+    )
+    actions: tuple[SkillAction, ...] = Field(
+        default=(),
+        description="Optional workflow actions to execute after the decision lands.",
     )
 
 
@@ -420,9 +454,12 @@ __all__ = [
     "LLMClient",
     "LLMConfigError",
     "LLMOfflineError",
-    "OfflineLLMClient",
-    "SkillResolverDecision",
     "NLIntentItem",
     "NLIntentList",
+    "NotifyAction",
+    "OfflineLLMClient",
     "ParsedRule",
+    "SkillAction",
+    "SkillResolverDecision",
+    "WriteEntityAction",
 ]
