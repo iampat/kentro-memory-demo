@@ -330,7 +330,11 @@ Bundles the deferred codex 3-finding fix (since Stage A immediately starts depen
 
 **Verification:** with the server populated by `task reset-and-seed`, every panel renders server data; switching agents in the dropdown causes deal_size to disappear from the CS view but remain in the Sales view (proving ACL is being respected through real fetch); Network tab shows `/entities/...`, `/documents`, `/rules` requests; clicking through with `data.js` deleted from disk still works for populated tenants.
 
-#### PR 10-3 — Stage B (wire writes + policy editor)
+#### PR 10-3 — Stage B (wire writes + policy editor) — **DONE**
+
+**Built:** `window.K.api` write surface (`applyRules` admin-elevated, `parseNL`, `writeField`, `ingestDocument`, `deleteDocument` admin-elevated). Per-row `× del ↑admin` button on documents (confirm + cascade warning + admin-elevation). `IngestForm` (label + source-class select + content textarea, expandable). `PolicyEditor` replaces the read-only `RulesPanel`: NL chat textarea + `parse`/`apply ↑admin` buttons, parsed-result preview (rules in green `+` form + `notes` line), 4-second highlight on newly-added rules in the structured view below. Client-side `ruleKey`/`diffRulesets` helpers mirror `kentro.rules.ruleset_diff` so the highlight works without a server round-trip. Auto-elevation pattern: `_fetch(path, {elevateToAdmin: true})` swaps the bearer for the admin key with a visible `↑admin` badge on the originating button. **Chrome-verified:** NL parse round-trip works (LLM returns parsed result); `apply` disabled until parser compiles a rule; ingest form opens; delete button shows admin badge. LLM rule-compilation quality is a server-side prompt-iteration concern (out of Stage B scope).
+
+#### PR 10-3 — original scope outline (kept for reference)
 
 - `window.K.api` write surface: `applyRules(ruleset)`, `parseNL(text)`, `writeField(...)`, `ingestDocument(content, label, sourceClass)`, `deleteDocument(id)`. Admin-only paths force admin token; UI shows `↑ admin` badge.
 - Two-pane policy editor:

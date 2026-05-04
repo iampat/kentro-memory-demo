@@ -167,6 +167,51 @@ window.K = window.K || {};
     return _fetch("/llm/stats");
   }
 
+  // ── Write API (admin-elevation auto for control-plane routes) ─────────────
+
+  async function applyRules(ruleset, summary) {
+    return _fetch("/rules/apply", {
+      method: "POST",
+      body: JSON.stringify({ ruleset, summary }),
+      elevateToAdmin: true,
+    });
+  }
+
+  async function parseNL(text) {
+    return _fetch("/rules/parse", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  async function writeField(entity_type, entity_key, field_name, value_json, confidence) {
+    return _fetch(
+      `/entities/${encodeURIComponent(entity_type)}/${encodeURIComponent(
+        entity_key
+      )}/${encodeURIComponent(field_name)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ value_json, confidence }),
+      }
+    );
+  }
+
+  async function ingestDocument(content, label, source_class) {
+    // Acting agent ingests — not admin-elevated. Most plausible field-write
+    // permissions live on the active agent (e.g. ingestion_agent has them).
+    return _fetch("/documents", {
+      method: "POST",
+      body: JSON.stringify({ content, label, source_class }),
+    });
+  }
+
+  async function deleteDocument(document_id) {
+    return _fetch(`/documents/${encodeURIComponent(document_id)}`, {
+      method: "DELETE",
+      elevateToAdmin: true,
+    });
+  }
+
   // ── Public surface ────────────────────────────────────────────────────────
 
   K.api = {
@@ -184,6 +229,12 @@ window.K = window.K || {};
     listSchema,
     getRules,
     getStats,
+    // writes
+    applyRules,
+    parseNL,
+    writeField,
+    ingestDocument,
+    deleteDocument,
     // low-level escape hatch
     _fetch,
   };
