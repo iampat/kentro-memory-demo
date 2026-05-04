@@ -97,6 +97,7 @@ def get_entity(
         resolver=AutoResolverSpec(),
         llm=llm,
         event_bus=event_bus,
+        bypass_acl=principal.is_admin,
     )
 
 
@@ -122,6 +123,7 @@ def read(
         resolver=body.resolver,
         llm=llm,
         event_bus=event_bus,
+        bypass_acl=principal.is_admin,
     )
 
 

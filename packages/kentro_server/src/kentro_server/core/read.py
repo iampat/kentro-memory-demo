@@ -57,6 +57,7 @@ def read_entity(
     resolver: ResolverSpec,
     llm: LLMClient,
     event_bus: EventBus | None = None,
+    bypass_acl: bool = False,
 ) -> EntityRecord:
     """Build the EntityRecord an agent sees for `(entity_type, entity_key)`.
 
@@ -73,6 +74,12 @@ def read_entity(
     If the entity does not exist in the DB, returns an EntityRecord with all
     declared fields as UNKNOWN. The caller may interpret "all UNKNOWN" as
     "entity not found" if it cares.
+
+    `bypass_acl=True` skips both visibility and per-field ACL checks. Callers
+    set this for principals with `is_admin=True` so the canonical/global view
+    sees every populated field regardless of which FieldReadRules exist (or
+    don't). Resolver / lineage logic is unchanged — only the ACL gate is
+    bypassed.
     """
     type_def = schema.get(entity_type)
     if type_def is None:
@@ -84,14 +91,18 @@ def read_entity(
     # If the agent cannot see this entity, every declared field comes back
     # HIDDEN with the visibility-denial reason. This is the same outcome shape
     # as field-level deny — uniform from the SDK's perspective — but the
-    # enforcement happens once instead of per-field.
-    visibility = evaluate_entity_visibility(
-        entity_type=entity_type,
-        entity_key=entity_key,
-        agent_id=agent_id,
-        ruleset=ruleset,
-    )
-    if not visibility.allowed:
+    # enforcement happens once instead of per-field. Admins (bypass_acl) skip
+    # this gate entirely.
+    if not bypass_acl:
+        visibility = evaluate_entity_visibility(
+            entity_type=entity_type,
+            entity_key=entity_key,
+            agent_id=agent_id,
+            ruleset=ruleset,
+        )
+    else:
+        visibility = None
+    if visibility is not None and not visibility.allowed:
         return EntityRecord(
             entity_type=entity_type,
             key=entity_key,
@@ -130,18 +141,19 @@ def read_entity(
     for field_def in type_def.fields:
         field_name = field_def.name
 
-        acl = evaluate_field_read(
-            entity_type=entity_type,
-            field_name=field_name,
-            agent_id=agent_id,
-            ruleset=ruleset,
-        )
-        if not acl.allowed:
-            fields[field_name] = FieldValue(
-                status=FieldStatus.HIDDEN,
-                reason=acl.reason or "field hidden by access rule",
+        if not bypass_acl:
+            acl = evaluate_field_read(
+                entity_type=entity_type,
+                field_name=field_name,
+                agent_id=agent_id,
+                ruleset=ruleset,
             )
-            continue
+            if not acl.allowed:
+                fields[field_name] = FieldValue(
+                    status=FieldStatus.HIDDEN,
+                    reason=acl.reason or "field hidden by access rule",
+                )
+                continue
 
         candidates = live_writes_by_field.get(field_name, [])
         if not candidates:
@@ -394,23 +406,52 @@ def _record_execution(
 
 
 def _to_field_value(resolved) -> FieldValue:
-    """Translate a `core.resolve.ResolvedFieldValue` into the SDK-shaped FieldValue."""
+    """Translate a `core.resolve.ResolvedFieldValue` into the SDK-shaped FieldValue.
+
+    For KNOWN status the resolver returns every candidate that contributed —
+    multiple corroborating writes can carry the same value via different
+    sources. We surface all of them in `lineage` (one record per write,
+    deduplicated by source_document_id so a doc that wrote the same field
+    twice doesn't double-count) so the UI can show all sources that backed
+    the resolved value, not just the latest one.
+    """
     if resolved.status == FieldStatus.KNOWN and resolved.winner is not None:
         winner = resolved.winner
-        lineage = (
-            LineageRecord(
-                source_document_id=winner.source_document_id,
-                written_at=winner.written_at,
-                written_by_agent_id=winner.written_by_agent_id,
-                rule_version=winner.rule_version_at_write,
-                extraction_step_id=winner.extraction_step_id,
-            ),
-        )
+        # All candidates corroborate the resolved value (the resolver's
+        # KNOWN-status fast paths require either a single candidate, or many
+        # candidates with one distinct value). Emit a LineageRecord per
+        # candidate so the UI can render every source that backed the call.
+        # Sort: winner first, then chronological — keeps the demo's "this
+        # is the source of truth" anchor visible while preserving timeline
+        # readability for the corroborating sources below.
+        chronological = sorted(resolved.candidates, key=lambda c: c.written_at)
+        ordered = [winner] + [c for c in chronological if c.id != winner.id]
+        seen_sources: set = set()
+        lineage_list: list[LineageRecord] = []
+        for c in ordered:
+            # Dedupe by source_document_id only when set — multiple writes
+            # from the same doc (rare but possible if a doc is re-ingested)
+            # collapse to one lineage row. Writes with no source (manual
+            # API writes) keep their own row.
+            if c.source_document_id is not None:
+                if c.source_document_id in seen_sources:
+                    continue
+                seen_sources.add(c.source_document_id)
+            lineage_list.append(
+                LineageRecord(
+                    source_document_id=c.source_document_id,
+                    written_at=c.written_at,
+                    written_by_agent_id=c.written_by_agent_id,
+                    rule_version=c.rule_version_at_write,
+                    extraction_step_id=c.extraction_step_id,
+                    value=_decode(c.value_json),
+                )
+            )
         return FieldValue(
             status=FieldStatus.KNOWN,
             value=_decode(winner.value_json),
             confidence=winner.confidence,
-            lineage=lineage,
+            lineage=tuple(lineage_list),
         )
 
     # UNRESOLVED — surface every candidate.
@@ -425,6 +466,7 @@ def _to_field_value(resolved) -> FieldValue:
                     written_by_agent_id=c.written_by_agent_id,
                     rule_version=c.rule_version_at_write,
                     extraction_step_id=c.extraction_step_id,
+                    value=_decode(c.value_json),
                 ),
             ),
         )

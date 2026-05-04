@@ -38,6 +38,366 @@ K.docMeta = function (doc) {
   }
 };
 
+// Format a field value from `GET /entities/...` as a display string. Hidden
+// fields show the redaction marker; unresolved fields show candidate values
+// joined by `⇄`; known fields show the raw string or JSON-encoded value.
+// Shared between AgentPanel (top-row live read) and EntityOverlay (the
+// global+per-agent comparison view).
+K.fmtFieldValue = function (fval) {
+  if (!fval) return "—";
+  switch (fval.status) {
+    case "hidden":
+      return "⊘ redacted by ACL";
+    case "unknown":
+      return "—";
+    case "unresolved": {
+      const cands = (fval.candidates || []).map((c) => JSON.stringify(c.value));
+      return cands.join(" ⇄ ") || "(unresolved)";
+    }
+    case "known":
+      return typeof fval.value === "string" ? fval.value : JSON.stringify(fval.value);
+    default:
+      return JSON.stringify(fval.value ?? "—");
+  }
+};
+
+// Compact one-liner for a candidate value rendered inside a chip — strings
+// stay un-quoted, numbers stay raw, anything else gets JSON.stringify. Long
+// values are clipped with an ellipsis so the chip doesn't blow out the
+// drawer width. Used by the lineage flow's CANDIDATES column.
+K.fmtCandidateValue = function (value) {
+  if (value === null || value === undefined) return "—";
+  let s;
+  if (typeof value === "string") s = value;
+  else if (typeof value === "number" || typeof value === "boolean") s = String(value);
+  else s = JSON.stringify(value);
+  if (s.length > 28) return s.slice(0, 26) + "…";
+  return s;
+};
+
+// Display-friendly version of a document filename: strip the `.md` suffix the
+// corpus uses but keep the stem intact. The on-disk label stays canonical;
+// only the rendering changes. Returns "" for null/undefined so callers don't
+// have to null-guard.
+K.docLabel = function (label) {
+  if (!label) return "";
+  return String(label).replace(/\.md$/i, "");
+};
+
+// === Source-class-aware document rendering ==================================
+//
+// Parses each corpus document into a typed structure so the UI can render it
+// in a tool-shaped frame (Gong call / Jira ticket / Gmail email) instead of
+// raw markdown. The parsers are intentionally regex-based — the corpus is
+// small, hand-authored, and predictable; pulling in a markdown parser would
+// be over-engineering. If a doc doesn't match the expected shape, the parsers
+// return `{ kind: "raw" }` and the renderer falls back to <pre>.
+
+K.parseCallContent = function (content) {
+  // Expected: `## <title>\n\n**Speaker:** text\n\n**Speaker:** text...`
+  const lines = String(content || "").split("\n");
+  let title = "";
+  if (lines[0] && lines[0].startsWith("## ")) {
+    title = lines[0].replace(/^##\s+/, "");
+  }
+  const turns = [];
+  // Each turn starts with `**Name:**` and runs until the next `**Name:**` or EOF.
+  // Walk the body line-by-line so multi-paragraph turns stay together.
+  const turnRe = /^\*\*([^:*]+):\*\*\s*(.*)$/;
+  let cur = null;
+  for (let i = title ? 1 : 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const m = ln.match(turnRe);
+    if (m) {
+      if (cur) turns.push(cur);
+      cur = { speaker: m[1].trim(), text: m[2] };
+    } else if (cur) {
+      cur.text += "\n" + ln;
+    }
+  }
+  if (cur) turns.push(cur);
+  // Trim trailing whitespace on each turn.
+  turns.forEach((t) => {
+    t.text = t.text.trim();
+  });
+  if (turns.length === 0) return { kind: "raw", content };
+  return { kind: "call", title, turns };
+};
+
+K.parseTicketContent = function (content) {
+  // Expected: `## Ticket #N - X\n\n**Status:** ...\n**Severity:** ...\n\n---\n\n### Description\n\n...`
+  // The corpus uses two heading styles inside the body — `### Description`
+  // (markdown heading) AND `**Description:**` (bold-key, alone on its line).
+  // The parser handles both so 142.md and 157.md both render with proper
+  // section headings rather than raw bold text in the body.
+  const text = String(content || "");
+  const lines = text.split("\n");
+  let title = "";
+  let cursor = 0;
+  if (lines[0] && lines[0].startsWith("## ")) {
+    title = lines[0].replace(/^##\s+/, "");
+    cursor = 1;
+  }
+  // Skip blank lines, then collect `**Key:** value` lines until we hit the `---`
+  // separator. A `**Key:**` line with NO value (just whitespace after) is a
+  // section heading, not a metadata field — bail to the body parser.
+  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  const fields = [];
+  const fieldRe = /^\*\*([^:*]+):\*\*\s*(.*)$/;
+  while (cursor < lines.length) {
+    const ln = lines[cursor];
+    if (ln.trim() === "" || ln.trim().startsWith("---") || ln.trim().startsWith("###")) break;
+    const m = ln.match(fieldRe);
+    if (m) {
+      const value = m[2].trim();
+      if (value === "") break; // bold-only line → section heading, not field
+      fields.push({ key: m[1].trim(), value });
+      cursor++;
+    } else {
+      break;
+    }
+  }
+  // Skip blank lines + the `---` rule + blank lines.
+  while (cursor < lines.length) {
+    const t = lines[cursor].trim();
+    if (t === "" || t === "---") {
+      cursor++;
+      continue;
+    }
+    break;
+  }
+  // Body: split into sections by `### Heading` OR `**Heading:**` (alone).
+  const sections = [];
+  let curHeading = null;
+  let curBody = [];
+  const flush = () => {
+    if (curHeading || curBody.length > 0) {
+      sections.push({ heading: curHeading, body: curBody.join("\n").trim() });
+    }
+  };
+  const boldHeadRe = /^\*\*([^:*]+):\*\*\s*$/;
+  for (; cursor < lines.length; cursor++) {
+    const ln = lines[cursor];
+    if (ln.startsWith("### ")) {
+      flush();
+      curHeading = ln.replace(/^###\s+/, "").trim();
+      curBody = [];
+      continue;
+    }
+    const bm = ln.match(boldHeadRe);
+    if (bm) {
+      flush();
+      curHeading = bm[1].trim();
+      curBody = [];
+      continue;
+    }
+    curBody.push(ln);
+  }
+  flush();
+  if (fields.length === 0 && sections.length === 0) return { kind: "raw", content };
+  return { kind: "ticket", title, fields, sections };
+};
+
+// Slack thread parser. Matches `## Slack - #channel - date\n\n*description*\n\n---\n\n**handle** [HH:MM]\nbody...`
+K.parseSlackContent = function (content) {
+  const text = String(content || "");
+  const lines = text.split("\n");
+  let title = "";
+  let subtitle = "";
+  let cursor = 0;
+  if (lines[0] && lines[0].startsWith("## ")) {
+    title = lines[0].replace(/^##\s+/, "");
+    cursor = 1;
+  }
+  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  // Optional italicized blurb (`*Thread in #aes regarding ...*`).
+  if (cursor < lines.length) {
+    const ln = lines[cursor].trim();
+    const im = ln.match(/^\*([^*][^*]*[^*])\*$/);
+    if (im) {
+      subtitle = im[1];
+      cursor++;
+    }
+  }
+  // Skip the `---` rule + blanks.
+  while (cursor < lines.length) {
+    const t = lines[cursor].trim();
+    if (t === "" || t === "---") {
+      cursor++;
+      continue;
+    }
+    break;
+  }
+  const messages = [];
+  // Each message: `**handle** [HH:MM]` line, then text until the next message or EOF.
+  const headRe = /^\*\*([^*]+)\*\*\s*\[([^\]]+)\]\s*$/;
+  let cur = null;
+  for (; cursor < lines.length; cursor++) {
+    const ln = lines[cursor];
+    const m = ln.match(headRe);
+    if (m) {
+      if (cur) messages.push(cur);
+      cur = { handle: m[1].trim(), time: m[2].trim(), text: "" };
+    } else if (cur) {
+      cur.text += (cur.text ? "\n" : "") + ln;
+    }
+  }
+  if (cur) messages.push(cur);
+  messages.forEach((m) => {
+    m.text = m.text.trim();
+  });
+  if (messages.length === 0) return { kind: "raw", content };
+  return { kind: "slack", title, subtitle, messages };
+};
+
+// Inline-markdown formatter for note bodies — handles **bold** and `code`.
+// Returns an array of {type, text} segments the renderer can map to JSX.
+K.tokenizeInlineMarkdown = function (text) {
+  if (!text) return [];
+  const tokens = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) tokens.push({ type: "text", text: text.slice(last, m.index) });
+    const seg = m[0];
+    if (seg.startsWith("**")) tokens.push({ type: "bold", text: seg.slice(2, -2) });
+    else if (seg.startsWith("`")) tokens.push({ type: "code", text: seg.slice(1, -1) });
+    last = m.index + seg.length;
+  }
+  if (last < text.length) tokens.push({ type: "text", text: text.slice(last) });
+  return tokens;
+};
+
+// Note parser: produces a sequence of typed blocks (heading, paragraph,
+// list, label-value) the renderer can map to proper markdown-ish JSX. Used
+// for meeting notes and any note-class document that isn't a slack thread.
+K.parseNoteContent = function (content) {
+  const text = String(content || "");
+  const lines = text.split("\n");
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    const trimmed = ln.trim();
+    if (trimmed === "") {
+      i++;
+      continue;
+    }
+    if (ln.startsWith("## ")) {
+      blocks.push({ type: "heading", level: 2, text: ln.replace(/^##\s+/, "") });
+      i++;
+      continue;
+    }
+    if (ln.startsWith("### ")) {
+      blocks.push({ type: "heading", level: 3, text: ln.replace(/^###\s+/, "") });
+      i++;
+      continue;
+    }
+    // Bullet list — collect contiguous `- ` lines.
+    if (ln.startsWith("- ") || ln.startsWith("* ")) {
+      const items = [];
+      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) {
+        items.push(lines[i].replace(/^[-*]\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: "list", items });
+      continue;
+    }
+    // Label-value `**Key:** value` — short metadata pair, render as a row
+    // rather than a paragraph so the note reads like a structured note.
+    const fieldRe = /^\*\*([^:*]+):\*\*\s+(.+)$/;
+    const fm = ln.match(fieldRe);
+    if (fm) {
+      blocks.push({ type: "field", key: fm[1].trim(), value: fm[2].trim() });
+      i++;
+      continue;
+    }
+    // Otherwise gather lines into a paragraph until blank.
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== "") {
+      para.push(lines[i]);
+      i++;
+    }
+    if (para.length > 0) blocks.push({ type: "paragraph", text: para.join("\n") });
+  }
+  return { kind: "note", blocks };
+};
+
+K.parseEmailContent = function (content) {
+  // Expected: `## Email - X -> Y, date\n\n**From:** ...\n**To:** ...\n**Subject:** ...\n**Date:** ...\n\n---\n\nbody`
+  const text = String(content || "");
+  const lines = text.split("\n");
+  let title = "";
+  let cursor = 0;
+  if (lines[0] && lines[0].startsWith("## ")) {
+    title = lines[0].replace(/^##\s+/, "");
+    cursor = 1;
+  }
+  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  const headers = {};
+  const fieldRe = /^\*\*([^:*]+):\*\*\s*(.*)$/;
+  while (cursor < lines.length) {
+    const ln = lines[cursor];
+    if (ln.trim() === "" || ln.trim().startsWith("---")) break;
+    const m = ln.match(fieldRe);
+    if (m) {
+      headers[m[1].trim().toLowerCase()] = m[2].trim();
+      cursor++;
+    } else {
+      break;
+    }
+  }
+  while (cursor < lines.length) {
+    const t = lines[cursor].trim();
+    if (t === "" || t === "---") {
+      cursor++;
+      continue;
+    }
+    break;
+  }
+  const body = lines.slice(cursor).join("\n").trim();
+  if (!headers.from && !headers.to && !headers.subject) return { kind: "raw", content };
+  return {
+    kind: "email",
+    title,
+    from: headers.from || null,
+    to: headers.to || null,
+    subject: headers.subject || null,
+    date: headers.date || null,
+    body,
+  };
+};
+
+// Pick the right parser based on the canonical source_class produced during
+// ingest (verbal/email/ticket/note). Falls back to filename heuristics for
+// older state. For notes, the title or filename further distinguishes Slack
+// threads (rendered as a chat) from meeting notes (rendered as markdown).
+// Returns `{ kind: "raw", content }` when nothing matches so the renderer
+// always has something to show.
+K.parseDocumentContent = function (doc) {
+  if (!doc) return { kind: "raw", content: "" };
+  const meta = K.docMeta({ source_class: doc.source_class, label: doc.label });
+  const content = doc.content || "";
+  const label = (doc.label || "").toLowerCase();
+  switch (meta.typeLabel) {
+    case "Call":
+      return K.parseCallContent(content);
+    case "Ticket":
+      return K.parseTicketContent(content);
+    case "Email":
+      return K.parseEmailContent(content);
+    case "Note": {
+      const titleLower = content.split("\n", 1)[0].toLowerCase();
+      const isSlack = label.includes("slack") || titleLower.includes("slack");
+      if (isSlack) return K.parseSlackContent(content);
+      return K.parseNoteContent(content);
+    }
+    default:
+      return { kind: "raw", content };
+  }
+};
+
 K.cls = function (...parts) {
   return parts.filter(Boolean).join(" ");
 };

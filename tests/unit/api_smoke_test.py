@@ -533,7 +533,11 @@ def test_demo_keys_404_without_opt_in(
 
 
 def test_entity_visibility_denial_hides_all_fields(client: TestClient) -> None:
-    """A denying EntityVisibilityRule must HIDE every declared field on the entity."""
+    """A denying EntityVisibilityRule must HIDE every declared field on the entity.
+
+    Verified against a non-admin bearer (sales) — admins bypass ACL by design,
+    so the visibility-denial path is only observable for non-admin principals.
+    """
     client.post(
         "/schema/register",
         headers=_admin(),
@@ -550,35 +554,38 @@ def test_entity_visibility_denial_hides_all_fields(client: TestClient) -> None:
         },
     )
     rules = (
+        # Allow ingestion (the writer in this test) so the seed write below
+        # actually persists.
         FieldReadRule(
             agent_id="ingestion_agent", entity_type="Customer", field_name="name", allowed=True
         ),
+        EntityVisibilityRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+        # Sales: field-read allows, BUT entity-visibility denies the specific
+        # key — so every field on Customer:Acme should come back HIDDEN.
+        FieldReadRule(agent_id="sales", entity_type="Customer", field_name="name", allowed=True),
         FieldReadRule(
-            agent_id="ingestion_agent",
-            entity_type="Customer",
-            field_name="deal_size",
-            allowed=True,
+            agent_id="sales", entity_type="Customer", field_name="deal_size", allowed=True
         ),
         EntityVisibilityRule(
-            agent_id="ingestion_agent",
+            agent_id="sales",
             entity_type="Customer",
             entity_key="Acme",
             allowed=False,
         ),
-        WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
     )
     client.post(
         "/rules/apply",
         headers=_admin(),
         json={
             "ruleset": RuleSet(rules=rules, version=0).model_dump(mode="json"),
-            "summary": "deny visibility on Customer:Acme",
+            "summary": "deny visibility on Customer:Acme for sales",
         },
     )
     client.post(
         "/entities/Customer/Acme/name", headers=_admin(), json={"value_json": '"Acme Corp"'}
     )
-    r = client.get("/entities/Customer/Acme", headers=_admin())
+    r = client.get("/entities/Customer/Acme", headers=_agent())
     fields = r.json()["fields"]
     for fname, fv in fields.items():
         if fv["status"] != "hidden":
@@ -939,6 +946,33 @@ def test_list_extraction_steps_after_ingest(client: TestClient, fake_llm: FakeLL
 def test_extraction_steps_404_on_unknown_doc(client: TestClient) -> None:
     """A UUID for a nonexistent document → 404 (not a probe-leak 200 with empty list)."""
     r = client.get(f"/documents/{uuid4()}/extraction-steps", headers=_admin())
+    if r.status_code != 404:
+        raise AssertionError(f"expected 404 for unknown doc, got {r.status_code}: {r.text}")
+
+
+def test_get_document_content_returns_blob(client: TestClient, fake_llm: FakeLLM) -> None:
+    """`GET /documents/{id}/content` returns the raw markdown blob with the
+    document's label and source_class echoed back. Used by the demo UI's
+    "view source" drawer.
+    """
+    doc_id = _seed_ingested_doc(client, fake_llm)
+    r = client.get(f"/documents/{doc_id}/content", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"content fetch failed: {r.status_code} {r.text}")
+    body = r.json()
+    if body["id"] != doc_id:
+        raise AssertionError(f"id echo mismatch: {body!r}")
+    if body["label"] != "call.md":
+        raise AssertionError(f"label echo mismatch: {body!r}")
+    if body["source_class"] != "verbal":
+        raise AssertionError(f"source_class echo mismatch: {body!r}")
+    if body["content"] != "Acme renewal at $250K.":
+        raise AssertionError(f"content roundtrip mismatch: {body!r}")
+
+
+def test_get_document_content_404_on_unknown_doc(client: TestClient) -> None:
+    """A UUID for a nonexistent document → 404 (no enumeration probe leak)."""
+    r = client.get(f"/documents/{uuid4()}/content", headers=_admin())
     if r.status_code != 404:
         raise AssertionError(f"expected 404 for unknown doc, got {r.status_code}: {r.text}")
 

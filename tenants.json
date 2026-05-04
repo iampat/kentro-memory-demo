@@ -5,10 +5,16 @@
       "display_name": "Web UI Demo",
       "agents": [
         {
+          "id": "admin",
+          "api_key": "local-admin-do-not-share",
+          "display_name": "Admin",
+          "is_admin": true
+        },
+        {
           "id": "ingestion_agent",
           "api_key": "local-ingestion-do-not-share",
           "display_name": "Ingestion Agent",
-          "is_admin": true
+          "is_admin": false
         },
         {
           "id": "sales",

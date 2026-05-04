@@ -18,7 +18,10 @@ window.K = window.K || {};
 (function () {
   const LS_KEYS = "kentroDemoKeys";
   const LS_ACTING = "kentroActingAs";
-  const DEFAULT_ACTING = "ingestion_agent";
+  // Default "acting as" is the admin agent so that calls without an explicit
+  // bearerKey (listings, schema fetches, etc.) bypass ACL — the demo UI
+  // assumes the operator can see everything by default.
+  const DEFAULT_ACTING = "admin";
 
   // ── Token resolution ──────────────────────────────────────────────────────
 
@@ -78,9 +81,10 @@ window.K = window.K || {};
     // Try the cached admin key first.
     let adminKey = getAdminKey() || initialAdminKeyGuess;
     if (!adminKey) {
-      // Fall back to the well-known local default — the boot guard accepts
-      // it only when KENTRO_ALLOW_DEMO_KEYS=true is set, which `task dev` does.
-      adminKey = "local-ingestion-do-not-share";
+      // Fall back to the well-known local default. The admin agent (is_admin
+      // for ACL-bypassed reads + control-plane operations) is separate from
+      // the ingestion_agent worker that writes extracted facts.
+      adminKey = "local-admin-do-not-share";
     }
     try {
       const r = await fetch("/demo/keys", {
@@ -174,6 +178,10 @@ window.K = window.K || {};
     return r.steps || [];
   }
 
+  async function getDocumentContent(document_id) {
+    return _fetch(`/documents/${encodeURIComponent(document_id)}/content`);
+  }
+
   async function getViewAccessMatrix(entity_type) {
     return _fetch(`/viz/access-matrix?entity_type=${encodeURIComponent(entity_type)}`);
   }
@@ -265,6 +273,7 @@ window.K = window.K || {};
     readEntity,
     readEntityAs,
     listExtractionSteps,
+    getDocumentContent,
     getViewAccessMatrix,
     getViewGraph,
     getRulesRendered,
