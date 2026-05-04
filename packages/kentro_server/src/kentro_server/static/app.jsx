@@ -72,6 +72,12 @@ function App() {
   const [drawerPayload, setDrawerPayload] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [policyEntityType, setPolicyEntityType] = useState(null);
+  // Third stacked slot, sitting one drawer deeper than LineageDrawer (at
+  // right: 960px). Opens when the user clicks the RESOLVER chip in the
+  // lineage flow; the lineage drawer stays visible behind it so the
+  // candidate flow remains the editing context.
+  const [resolverTarget, setResolverTarget] = useState(null);
+  const [lineageRefreshKey, setLineageRefreshKey] = useState(0);
   const openSourceDoc = useCallback((id) => {
     setEntityPayload(null);
     setSourceDocId(id);
@@ -82,12 +88,27 @@ function App() {
   }, []);
   const openLineage = useCallback((payload) => {
     setPolicyEntityType(null);
+    setResolverTarget(null);
     setDrawerPayload(payload);
     setDrawerOpen(true);
   }, []);
   const openPolicy = useCallback((entityType) => {
     setDrawerOpen(false);
+    setResolverTarget(null);
     setPolicyEntityType(entityType);
+  }, []);
+  const openResolver = useCallback((target) => {
+    setResolverTarget(target);
+  }, []);
+  const closeResolver = useCallback(() => setResolverTarget(null), []);
+  // Closing the lineage drawer also dismisses the (deeper) resolver drawer —
+  // it's a child of the lineage flow, so leaving it orphaned when its parent
+  // closes is confusing. Covers ESC button click, backdrop click, etc.
+  // (The ESC keypath is also handled inside LineageDrawer to ensure the
+  // resolver drawer closes FIRST when both are open.)
+  const closeLineage = useCallback(() => {
+    setDrawerOpen(false);
+    setResolverTarget(null);
   }, []);
 
   const [refresh, setRefresh] = useState(0);
@@ -241,8 +262,20 @@ function App() {
       <K.LineageDrawer
         open={drawerOpen}
         payload={drawerPayload}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeLineage}
         documents={documents}
+        onEditResolver={openResolver}
+        refreshKey={lineageRefreshKey}
+      />
+      <K.ResolverDrawer
+        open={!!resolverTarget}
+        target={resolverTarget}
+        onClose={closeResolver}
+        onApplied={() => {
+          closeResolver();
+          setLineageRefreshKey((k) => k + 1);
+          bumpRefresh();
+        }}
       />
       <K.PolicyOverlay
         open={!!policyEntityType}

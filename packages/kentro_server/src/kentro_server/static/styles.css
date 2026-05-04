@@ -1310,6 +1310,17 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
  * over so any caller still passing `shifted` is harmless. */
 .drawer.shifted { right: 440px; z-index: 202; }
 .drawer.shifted.open { transform: translateX(0); }
+/* Deeper slot — sits one drawer further left of the LineageDrawer (which is
+ * pinned at right: 440px with width 520px), so its right edge meets the
+ * lineage drawer's left edge at viewport-960. Narrower than the lineage
+ * drawer because the resolver form is small. Slightly higher z-index so the
+ * left-edge shadow sits above the lineage drawer's right edge. */
+.drawer.drawer-deep {
+  right: 960px;
+  width: 380px;
+  z-index: 102;
+}
+.drawer.drawer-deep.open { transform: translateX(0); }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
@@ -2597,41 +2608,13 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   box-shadow: 0 4px 12px oklch(0.16 0.02 260 / 0.18);
 }
 
-/* Inline resolver editor — appears under the RESOLVER chip when clicked. */
-.resolver-editor {
-  margin-top: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg-2);
+/* Resolver editor form — hosted by ResolverDrawer (the drawer chrome
+ * supplies the title/close button), so the form itself is plain content. */
+.resolver-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: 100%;
+  gap: 12px;
 }
-.resolver-editor-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.resolver-editor-title {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-2);
-}
-.resolver-editor-close {
-  background: transparent;
-  border: none;
-  color: var(--ink-3);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-}
-.resolver-editor-close:hover { color: var(--ink); }
 .resolver-editor-row {
   display: flex;
   flex-direction: column;
