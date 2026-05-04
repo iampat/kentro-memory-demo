@@ -1,25 +1,29 @@
-"""Demo-only routes — `GET /demo/keys` returns the per-agent bearer tokens.
+"""Demo-only routes.
 
-Refuses to respond unless `KENTRO_ALLOW_DEMO_KEYS=true` is set (the same opt-in
-that gates the boot guard). This is the SAME safety knob — no separate flag —
-because if you've already opted into running with the public demo keys, then
-returning them via API to the local UI is no leak (the UI is on the same
-machine; the keys are committed to the repo). If you've rotated the keys for
-deployment, this endpoint won't return rotated values either; it just returns
-404 so the UI knows to fall back to manual entry.
+- `GET /demo/keys` returns the per-agent bearer tokens for the agent-switcher
+  bootstrap (admin + demo-keys-opt-in gated).
+- `POST /demo/seed` is the in-process equivalent of `kentro-server seed-demo`:
+  registers the four demo schemas, applies the canonical 29-rule starting
+  ruleset, and ingests every markdown in `examples/synthetic_corpus/`. Used by
+  the UI's "seed demo" button on an empty tenant. Same gating as `/demo/keys`.
 
-The agent-switcher in the demo UI calls this once on first load and caches the
-returned keys in localStorage. Without this endpoint, every demoer would need
-to copy-paste 3 bearer tokens out of `tenants.json` into the UI by hand.
+Both routes refuse to respond unless `KENTRO_ALLOW_DEMO_KEYS=true` is set —
+the same opt-in that gates the boot guard. If you've rotated the keys for a
+deployment these endpoints stay disabled regardless of role.
 """
 
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
+from kentro.schema import entity_type_def_from
 from pydantic import BaseModel, ConfigDict
 
 from kentro_server.api.auth import AdminPrincipalDep
-from kentro_server.api.deps import SettingsDep, TenantRegistryDep
+from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep, TenantRegistryDep
+from kentro_server.core.rules import apply_ruleset
+from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
+from kentro_server.extraction import ingest_document
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +75,94 @@ def get_demo_keys(
         for acfg in registry.agents_for(tenant_id)
     )
     return DemoKeysResponse(tenant_id=tenant_id, agents=agents)
+
+
+class DemoSeedResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    tenant_id: str
+    schemas_registered: tuple[str, ...]
+    rule_version: int
+    rules_applied: int
+    documents_ingested: int
+
+
+def _ensure_opted_in(settings) -> None:
+    if not settings.kentro_allow_demo_keys:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "/demo routes are disabled when KENTRO_ALLOW_DEMO_KEYS is not set "
+                "(this endpoint exists for the local-dev demo UI only)"
+            ),
+        )
+
+
+@router.post("/seed", response_model=DemoSeedResponse)
+def seed_demo(
+    principal: AdminPrincipalDep,
+    settings: SettingsDep,
+    schema: SchemaRegistryDep,
+    llm: LLMClientDep,
+) -> DemoSeedResponse:
+    """Register schemas + apply demo ruleset + ingest the corpus, all server-side.
+
+    Used by the UI's "Seed demo data" button on an empty tenant. Equivalent to
+    running the `kentro-server seed-demo` CLI but in-process — no second curl
+    loop, no duplicate Anthropic-key wiring.
+
+    Idempotent: re-registering existing schemas is a no-op for unchanged defs;
+    re-ingesting the same blob produces a new document row but the field writes
+    are corroboration on top of the prior ones.
+    """
+    _ensure_opted_in(settings)
+
+    # 1. Register the four demo entity types (Customer, Person, Deal, AuditLog).
+    type_defs = [
+        entity_type_def_from(Customer),
+        entity_type_def_from(Person),
+        entity_type_def_from(Deal),
+        entity_type_def_from(AuditLog),
+    ]
+    registered: list[str] = []
+    for td in type_defs:
+        schema.register(td)
+        registered.append(td.name)
+
+    # 2. Apply the canonical Scene-1 ruleset.
+    ruleset = initial_demo_ruleset()
+    rule_version = apply_ruleset(
+        principal.store,
+        rules=ruleset.rules,
+        summary="initial demo ruleset (POST /demo/seed)",
+    )
+
+    # 3. Ingest every markdown file in examples/synthetic_corpus/.
+    # demo.py → routes → api → kentro_server → src → kentro_server → packages → repo
+    # so parents[6] is the repo root.
+    repo_root = Path(__file__).resolve().parents[6]
+    corpus_dir = repo_root / "examples" / "synthetic_corpus"
+    if not corpus_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"corpus dir not found: {corpus_dir}",
+        )
+    docs = sorted(corpus_dir.glob("*.md"))
+    for path in docs:
+        ingest_document(
+            store=principal.store,
+            llm=llm,
+            content=path.read_text(encoding="utf-8").encode("utf-8"),
+            label=path.name,
+            registered_schemas=schema.list_all(),
+            written_by_agent_id=principal.agent_id,
+            rule_version=rule_version,
+            smart_model=settings.kentro_llm_smart_model,
+        )
+
+    return DemoSeedResponse(
+        tenant_id=principal.store.tenant_id,
+        schemas_registered=tuple(registered),
+        rule_version=rule_version,
+        rules_applied=len(ruleset.rules),
+        documents_ingested=len(docs),
+    )

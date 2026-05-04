@@ -212,6 +212,11 @@ window.K = window.K || {};
     });
   }
 
+  // Demo-only seed shortcut (admin + KENTRO_ALLOW_DEMO_KEYS gated).
+  async function seedDemo() {
+    return _fetch("/demo/seed", { method: "POST", elevateToAdmin: true });
+  }
+
   // ── Public surface ────────────────────────────────────────────────────────
 
   K.api = {
@@ -235,6 +240,7 @@ window.K = window.K || {};
     writeField,
     ingestDocument,
     deleteDocument,
+    seedDemo,
     // low-level escape hatch
     _fetch,
   };

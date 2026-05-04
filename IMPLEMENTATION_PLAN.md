@@ -346,7 +346,11 @@ Bundles the deferred codex 3-finding fix (since Stage A immediately starts depen
 
 **Verification:** `task reset-and-seed` then click through all 9 demo beats: ingest transcript → see entity → ingest email → see conflict banner → admin pastes "written outweighs verbal" → rule applied → conflict resolves → delete email → conflict re-emerges → fall back to $250K. Every transition causes the appropriate `/documents`, `/rules/apply`, `/entities/.../...` request, observable in Network tab. Sales-view shows deal_size after Scene 4; CS-view does not.
 
-#### PR 10-4 — Stage C (delete `data.js`)
+#### PR 10-4 — Stage C (delete `data.js`) — **DONE**
+
+**Built:** New `POST /demo/seed` admin-only + opt-in-gated route that registers the 4 demo schemas, applies the 29-rule canonical ruleset, and ingests every markdown in `examples/synthetic_corpus/` — in-process equivalent of the `kentro-server seed-demo` CLI. `K.api.seedDemo()` calls it admin-elevated. App detects empty tenant (no documents + ≤1 schema, since Note auto-seeds) and renders a centered "seed demo data ↑admin" hero in lieu of the 3-pane layout. **`data.js`, `panels.jsx`, `tweaks-panel.jsx` all deleted**; `index.html` cleaned up. `git grep KENTRO_DATA packages/` returns zero hits. End-to-end Chrome-verified: fresh state dir → empty overlay → click button → ~30s real-LLM extraction → populated 3-pane view with 29 rules + 4 entity types + 8 docs. The UI now contains zero canned data.
+
+#### PR 10-4 — original scope outline (kept for reference)
 
 - Remove `KENTRO_DATA` references from `helpers.js`, `panels.jsx`, `tweaks-panel.jsx`, `app.jsx`. No fallback paths.
 - `git rm static/data.js`.
