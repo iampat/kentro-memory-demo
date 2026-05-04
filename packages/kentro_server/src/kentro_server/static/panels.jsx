@@ -1678,11 +1678,11 @@ function LineageFlow({
 // type-specific fields, then POSTs to /resolvers/apply. Hosted by
 // ResolverDrawer (drawer chrome supplies the title + close button).
 // Resolver types that the editor exposes as user-selectable options. The
-// backend supports two more — `raw` and `prefer_agent` — but those are
-// legacy/specialised and we don't surface them as new choices. If a saved
-// policy uses one of them, we render a migration banner instead of silently
-// rewriting it (the previous behaviour, which was a destructive regression
-// on top of any state created via the API or older UI versions).
+// backend also supports `raw` (return all candidates without picking) but
+// that's a diagnostic affordance, not a stored policy choice — we don't
+// surface it here. If a saved policy ever uses `raw` we render a migration
+// banner instead of silently rewriting it (which would be a destructive
+// regression on top of any state created via the API or older UI versions).
 const USER_FACING_RESOLVER_TYPES = ["latest_write", "skill", "auto"];
 
 function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
@@ -1766,8 +1766,8 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
 
   // Legacy resolver, not yet migrating: surface the existing policy and
   // require an explicit "replace" before showing the editor. This prevents
-  // an inadvertent Apply from rewriting `prefer_agent`/`raw` to whatever
-  // the dropdown happens to be defaulted to.
+  // an inadvertent Apply from rewriting a non-user-facing type (e.g. `raw`)
+  // to whatever the dropdown happens to be defaulted to.
   if (isLegacy && !migrating) {
     return (
       <div className="resolver-form">

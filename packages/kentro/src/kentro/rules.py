@@ -104,7 +104,6 @@ def render_resolver_policy(policy: ResolverPolicy) -> str:
 
         [skill]  resolves Customer.deal_size → "written outweighs verbal"
         [latest] resolves Customer.deal_size (newest write wins)
-        [prefer] resolves Customer.contact   (agent=sales)
     """
     rtype = policy.resolver.type
     target = f"{policy.entity_type}.{policy.field_name}"
@@ -112,9 +111,6 @@ def render_resolver_policy(policy: ResolverPolicy) -> str:
         case "skill":
             prompt = getattr(policy.resolver, "prompt", "?")
             return f"[skill]  resolves     {target} → {prompt!r}"
-        case "prefer_agent":
-            agent = getattr(policy.resolver, "preferred_agent_id", "?")
-            return f"[prefer] resolves     {target} (agent={agent})"
         case "latest_write":
             return f"[latest] resolves     {target} (newest write wins)"
         case "raw":

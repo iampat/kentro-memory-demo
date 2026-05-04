@@ -45,7 +45,7 @@ kentro/                           # repo root
 │   │       ├── __init__.py
 │   │       ├── clients.py        # AdminClient, AgentClient
 │   │       ├── types.py          # Pydantic models (mirror server contract)
-│   │       ├── resolvers.py      # AutoResolver, RawResolver, LatestWriteResolver, PreferAgent, SkillResolver
+│   │       ├── resolvers.py      # AutoResolver, RawResolver, LatestWriteResolver, SkillResolver
 │   │       └── viz.py            # Jupyter / Colab visualization helpers
 │   ├── kentro_server/            # the server package (kentro-server CLI)
 │   │   ├── pyproject.toml
@@ -192,7 +192,7 @@ _To be written. Inputs / outputs / contract for the function that decides whethe
 
 ## Step 5 — Conflict detection & resolvers
 
-_To be written. Detection logic on writes. Resolver interface. Implementations of `LatestWriteResolver`, `PreferAgent`, `SkillResolver`. The `UNRESOLVED` path. **`SkillResolverDecision` carries an optional `actions` tuple** so a Skill can emit workflow steps alongside its winner pick (e.g. create a `Ticket` entity, fire a notification). The orchestrator executes each action through the same ACL gate as a regular write — Skills can't bypass governance. The notification primitive is a console log + websocket event for v0; real Slack integration is v0.1. **No separate `HumanReviewResolver` class** — "human review" is one shape a Skill can take, authored entirely in the Skill's markdown file (no Python required for new policies)._
+_To be written. Detection logic on writes. Resolver interface. Implementations of `LatestWriteResolver`, `SkillResolver`. The `UNRESOLVED` path. **`SkillResolverDecision` carries an optional `actions` tuple** so a Skill can emit workflow steps alongside its winner pick (e.g. create a `Ticket` entity, fire a notification). The orchestrator executes each action through the same ACL gate as a regular write — Skills can't bypass governance. The notification primitive is a console log + websocket event for v0; real Slack integration is v0.1. **No separate `HumanReviewResolver` class** — "human review" is one shape a Skill can take, authored entirely in the Skill's markdown file (no Python required for new policies)._
 
 **Status (2026-05-03):** core resolvers shipped; `SkillResolverDecision.actions` extension is logged as a v0-follow-up TODO in `kentro_server/skills/llm_client.py` and tracked in `IMPLEMENTATION_PLAN.md` "Deferred to the very end" — needs to land before the Step 10 UI exercises the workflow-trigger demo beat.
 

@@ -200,7 +200,7 @@ class Client:
         """`POST /entities/{type}/{key}/read` — read with an explicit ResolverSpec.
 
         Use when you want `RawResolver` (surface every candidate),
-        `PreferAgent`, `SkillResolver` with a prompt, etc."""
+        `SkillResolver` with a prompt, etc."""
         # ResolverSpec is a Pydantic discriminated union; it's a Pydantic model
         # variant, so model_dump works directly.
         adapter: TypeAdapter[ResolverSpec] = TypeAdapter(ResolverSpec)
