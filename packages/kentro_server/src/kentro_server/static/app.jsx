@@ -10,10 +10,10 @@
 //   │ click row → drawer  │  click row → drawer      │  read-only     │
 //   └────────────────────────────────────────────────────────────────┘
 //
-// `data.js` is loaded as a fallback ONLY: if the tenant is empty (no docs, no
-// entities) we render a "Seed demo data" hint pointing at `task reset-and-seed`.
-// PR 10-4 wires that to a button. PR 10-3 turns this view's read-only ruleset
-// pane into a full two-pane policy editor.
+// Empty tenant: when /documents and /schema both return empty, the App renders
+// a "seed demo data" overlay that POSTs /demo/seed (admin + opt-in gated).
+// `data.js` was retired in PR 10-4 — every byte the UI shows now comes from the
+// server. The two-pane policy editor lives in the right column (PR 10-3).
 
 const { useState, useEffect, useCallback } = React;
 
@@ -837,6 +837,44 @@ function App() {
   const [refresh, setRefresh] = useState(0);
   const bumpRefresh = useCallback(() => setRefresh((n) => n + 1), []);
 
+  // Empty-tenant gate: when both /documents and /schema are empty, render the
+  // seed overlay instead of the populated layout. Cleared on first non-empty
+  // refresh (post-seed). PR 10-4 deletion: this replaces the data.js fallback.
+  const [seeding, setSeeding] = useState(false);
+  const [seedError, setSeedError] = useState(null);
+  const [schemaCount, setSchemaCount] = useState(null); // null = unknown
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const types = await K.api.listSchema();
+        if (!cancelled) setSchemaCount(types.length);
+      } catch {
+        if (!cancelled) setSchemaCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, refresh]);
+  // Note: Note auto-seeds on first /schema call (so 1 schema isn't really
+  // "empty"). Empty = no documents AND <=1 schema (the auto-seeded Note).
+  const isEmpty = !docsLoading && documents.length === 0 && (schemaCount ?? 0) <= 1;
+
+  const onSeed = async () => {
+    setSeeding(true);
+    setSeedError(null);
+    try {
+      await K.api.seedDemo();
+      bumpRefresh();
+    } catch (err) {
+      setSeedError(err.message);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   // Documents are tenant-scoped (not per-agent today), but refetch on agent
   // switch anyway so a future visibility filter on /documents takes effect.
   useEffect(() => {
@@ -860,6 +898,76 @@ function App() {
       cancelled = true;
     };
   }, [acting, ready, refresh]);
+
+  if (ready && isEmpty) {
+    return (
+      <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+        <K.AgentSwitcher />
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 40,
+            textAlign: "center",
+            background: "var(--bg)",
+          }}
+        >
+          <h2
+            style={{
+              fontFamily: "var(--mono)",
+              fontSize: 14,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "var(--ink-2)",
+              marginBottom: 14,
+            }}
+          >
+            empty tenant
+          </h2>
+          <p style={{ color: "var(--ink-2)", maxWidth: 480, marginBottom: 24, fontSize: 14 }}>
+            No schemas registered, no documents ingested. Click below to seed the demo
+            world: 4 entity types (<code>Customer</code>, <code>Person</code>, <code>Deal</code>,
+            <code>AuditLog</code>), 29 ACL rules, and 8 markdown documents from the synthetic
+            corpus.
+          </p>
+          <button
+            onClick={onSeed}
+            disabled={seeding}
+            className="ghost-btn"
+            style={{ fontSize: 12, padding: "8px 18px" }}
+          >
+            {seeding ? "seeding (this calls the LLM, ~30s)…" : "seed demo data"}
+            <span style={{ marginLeft: 8, color: "var(--accent, #4ade80)" }}>↑admin</span>
+          </button>
+          {seedError && (
+            <div
+              style={{
+                marginTop: 14,
+                color: "#ef4444",
+                fontFamily: "var(--mono)",
+                fontSize: 11,
+              }}
+            >
+              {seedError}
+            </div>
+          )}
+          <p
+            style={{
+              marginTop: 28,
+              color: "var(--ink-3)",
+              fontFamily: "var(--mono)",
+              fontSize: 10,
+            }}
+          >
+            equivalent to <code>task reset-and-seed</code>; safe to re-run.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
