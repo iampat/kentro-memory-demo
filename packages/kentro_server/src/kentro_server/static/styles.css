@@ -118,54 +118,205 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   position: relative;
 }
 
-/* Bottom-row tabbed workspace: ingestion + reasoning graph share 2 columns */
+/* Bottom-row workspace: reasoning graph spans both bottom-left columns. */
 .work-panel {
   grid-column: 1 / 3;
   grid-row: 2;
-}
-.work-tabs {
-  gap: 4px;
-  padding: 6px 12px;
-}
-.work-tab {
-  background: transparent;
-  border: none;
-  padding: 6px 12px;
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: var(--ink-3);
-  cursor: pointer;
-  border-radius: 5px;
-  transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-.work-tab:hover { color: var(--ink-2); background: oklch(1 0 0 / 0.5); }
-.work-tab.active {
-  background: linear-gradient(180deg, var(--ink), oklch(0.22 0.02 260));
-  color: var(--bg);
-  box-shadow: 0 2px 6px oklch(0.16 0.02 260 / 0.2), 0 1px 0 oklch(1 0 0 / 0.1) inset;
-}
-.work-body {
-  display: flex;
-  flex-direction: column;
   padding: 0;
 }
 .work-pane {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+.work-graph-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
 }
-/* Inner panels render their own .panel chrome — suppress the duplicate border
- * and head since WorkPanel already provides those.
+/* Inner panel renders its own chrome — suppress the duplicate border since
+ * WorkPanel is already a .panel wrapper.
  */
-.work-pane > .panel {
+.work-graph-area > .panel {
   border: none;
   background: transparent;
   flex: 1;
   min-height: 0;
 }
-.work-pane > .panel > .panel-head { display: none; }
+/* Demo-only "drop the Jane Doe email" trigger lives in the graph head. */
+.ingest-email-btn {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.ingest-email-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ingest-email-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Source overlay (right-edge slide-over that covers everything except the
+ * topbar). Anchored full-height at the right; ~50vw clamped to a sensible
+ * range so it works on both narrow and ultrawide screens.
+ */
+.source-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(0.18 0.01 80 / 0.32);
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms;
+}
+.source-overlay-backdrop.open { opacity: 1; pointer-events: auto; }
+.source-overlay {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: 440px;
+  background: linear-gradient(180deg, oklch(0.99 0.005 260), oklch(0.97 0.01 260));
+  border-left: 1px solid var(--line);
+  z-index: 201;
+  transform: translateX(100%);
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -16px 0 48px oklch(0.16 0.02 260 / 0.18);
+}
+.source-overlay.open { transform: translateX(0); }
+.source-overlay-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.source-overlay-head .title {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.source-overlay-head button {
+  background: transparent; border: 1px solid var(--line);
+  padding: 2px 8px;
+  font-family: var(--mono); font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.source-overlay-body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 22px;
+}
+.source-overlay-trace {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+.source-overlay-trace-heading {
+  margin: 0 0 8px 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+.extraction-stream-empty {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+/* Entity overlay — header uses a type chip + plain key so it reads correctly
+ * for any entity (not just Customers, where key happens to be a name). */
+.entity-overlay-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.entity-type-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.entity-key-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+/* Entity overlay — global + per-agent comparison cards stacked vertically. */
+.entity-overlay-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+}
+.entity-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: oklch(1 0 0);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.entity-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.entity-card-body { padding: 6px 0; }
+.entity-card-fields { display: flex; flex-direction: column; }
+.entity-card-field {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  gap: 8px;
+  padding: 8px 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--line-2);
+}
+.entity-card-field:last-child { border-bottom: none; }
+.entity-card-field-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.entity-card-field-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.entity-card-field.hidden .entity-card-field-value { color: var(--ink-3); font-style: italic; }
+.entity-card-field.clickable { cursor: pointer; transition: background 120ms; }
+.entity-card-field.clickable:hover { background: var(--bg-2); }
 .panel {
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1124,6 +1275,16 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   box-shadow: -16px 0 48px oklch(0.16 0.02 260 / 0.18);
 }
 .drawer.open { transform: translateX(0); }
+/* When EntityOverlay (z=201, 440px right-edge panel) is open, slide the
+ * lineage drawer to the LEFT of it so both are visible side-by-side.
+ * z-index bumps above the overlay's backdrop so the drawer is clickable,
+ * but stays below the overlay itself so the overlay still receives clicks
+ * on its own area. */
+.drawer.shifted {
+  right: 440px;
+  z-index: 202;
+}
+.drawer.shifted.open { transform: translateX(0); }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
@@ -1147,6 +1308,344 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   flex: 1;
   overflow: auto;
   padding: 16px;
+}
+/* Raw markdown / source text — fallback when the source-class doesn't match
+ * one of the styled renderers (Notes, slack threads, etc.). `pre-wrap` keeps
+ * indented columns intact while letting long paragraphs reflow.
+ */
+.document-content {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: oklch(0.995 0.003 260);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+/* === Gong-style call transcript ============================================ */
+.doc-call {
+  font-family: var(--sans);
+}
+.doc-call-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.doc-call-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.doc-call-turn {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: oklch(0.995 0.003 260);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-3);
+}
+.doc-call-speaker {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.doc-call-name { font-weight: 700; }
+.doc-call-time {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+.doc-call-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.doc-call-turn.hue-accent-blue   { border-left-color: oklch(0.55 0.18 255); }
+.doc-call-turn.hue-accent-blue   .doc-call-speaker { color: oklch(0.45 0.18 255); }
+.doc-call-turn.hue-accent-green  { border-left-color: oklch(0.55 0.16 155); }
+.doc-call-turn.hue-accent-green  .doc-call-speaker { color: oklch(0.42 0.16 155); }
+.doc-call-turn.hue-accent-purple { border-left-color: oklch(0.55 0.20 290); }
+.doc-call-turn.hue-accent-purple .doc-call-speaker { color: oklch(0.45 0.20 290); }
+.doc-call-turn.hue-accent-orange { border-left-color: oklch(0.62 0.17 50); }
+.doc-call-turn.hue-accent-orange .doc-call-speaker { color: oklch(0.50 0.17 50); }
+
+/* === Jira-style ticket ===================================================== */
+.doc-ticket {
+  font-family: var(--sans);
+}
+.doc-ticket-header {
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.doc-ticket-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.doc-ticket-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.doc-ticket-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.doc-ticket-chip .chip-key {
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.doc-ticket-chip .chip-value {
+  font-weight: 600;
+  color: var(--ink);
+}
+/* Color a few common status/severity values to read like Jira. */
+.doc-ticket-chip[class*="chip-status-open"]      { background: oklch(0.96 0.05 50);  color: oklch(0.40 0.16 50); }
+.doc-ticket-chip[class*="chip-status-in-progress"] { background: oklch(0.96 0.05 255); }
+.doc-ticket-chip[class*="chip-status-resolved"]  { background: oklch(0.96 0.05 155); color: oklch(0.40 0.16 155); }
+.doc-ticket-chip[class*="chip-status-closed"]    { background: oklch(0.97 0.005 260); color: var(--ink-3); }
+.doc-ticket-chip[class*="chip-severity-high"], .doc-ticket-chip[class*="chip-priority-high"] {
+  background: oklch(0.96 0.06 25); color: oklch(0.40 0.18 25);
+}
+.doc-ticket-chip[class*="chip-severity-medium"], .doc-ticket-chip[class*="chip-priority-medium"] {
+  background: oklch(0.96 0.05 70); color: oklch(0.42 0.16 70);
+}
+.doc-ticket-chip[class*="chip-severity-low"], .doc-ticket-chip[class*="chip-priority-low"] {
+  background: oklch(0.96 0.04 155); color: oklch(0.42 0.14 155);
+}
+.doc-ticket-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  padding: 10px 12px;
+  background: oklch(0.995 0.003 260);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+.doc-ticket-field-key {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+.doc-ticket-field-value { color: var(--ink); }
+.doc-ticket-section { margin-bottom: 14px; }
+.doc-ticket-section-heading {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.doc-ticket-section-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* === Gmail-style email ===================================================== */
+.doc-email {
+  font-family: var(--sans);
+}
+.doc-email-header {
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.doc-email-subject {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.doc-email-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.doc-email-row { display: flex; gap: 8px; }
+.doc-email-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  min-width: 36px;
+}
+.doc-email-value { color: var(--ink); }
+.doc-email-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* === Slack-style thread ==================================================== */
+.doc-slack {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  background: oklch(1 0 0);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.doc-slack-header {
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.doc-slack-channel {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.doc-slack-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.doc-slack-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.doc-slack-msg {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 10px;
+}
+.doc-slack-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+}
+.doc-slack-msg-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.doc-slack-handle {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+.doc-slack-time {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.doc-slack-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+/* === Markdown-rendered note ================================================ */
+.doc-note {
+  font-family: var(--sans);
+  color: var(--ink);
+  line-height: 1.55;
+}
+.doc-note-h2 {
+  margin: 0 0 14px 0;
+  font-size: 15px;
+  font-weight: 700;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.doc-note-h3 {
+  margin: 16px 0 6px 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.doc-note-p {
+  margin: 0 0 10px 0;
+  font-size: 13px;
+}
+.doc-note-list {
+  margin: 0 0 12px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+.doc-note-list li { margin-bottom: 4px; }
+.doc-note-field {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 12px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.doc-note-field-key {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.doc-note code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: oklch(0.96 0.005 260);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.doc-ticket-section-body code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: oklch(0.96 0.005 260);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.doc-ticket-section-body p {
+  margin: 0 0 10px 0;
+}
+.doc-ticket-section-body p:last-child {
+  margin-bottom: 0;
 }
 .lineage-section { margin-bottom: 18px; }
 .lineage-section h4 {
@@ -1768,4 +2267,199 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   margin-left: auto;
   font-size: 10px;
   color: var(--ink-3);
+}
+
+
+/* ── Lineage flow (v2: SVG arcs + per-source colors) ───────────────────────
+ *
+ *   ┌──── CANDIDATES ───┐    RESOLVER       RESULT
+ *   │  📞 call          │\
+ *   │  acme_call_…      │ ╲   ┌─────────┐
+ *   │                   │  ╲  │ RESOLVE │   ┌──────┐
+ *   │  📧 email         │───╳─┤  latest ├───┤285000│
+ *   │  email_jane_…     │  ╱  │  write  │   └──────┘
+ *   │                   │ ╱   └─────────┘
+ *   │  📝 note          │/
+ *   │  internal_…       │
+ *   └───────────────────┘
+ *
+ * The SVG layer lives behind the cards/chips; arcs are drawn from each
+ * card's right edge to the resolver's left edge after measurement, so
+ * connectors actually meet their targets. Each candidate gets a unique
+ * source color for the card border, the arc, the moving dot, and the
+ * value chip on the arc.
+ */
+.flow-stub {
+  padding: 18px 4px;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.flow-stub-msg { line-height: 1.5; }
+.flow-stub-reason {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border-left: 2px solid var(--line);
+  font-family: var(--mono);
+  color: var(--ink-2);
+}
+
+/* Three-region layout: candidates on the left at a fixed width, resolver
+ * centered, result on the right. justify-content: space-between leaves the
+ * intra-column space free for the SVG arcs to draw across. */
+.flow-h2 {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 0;
+  padding: 22px 8px 14px;
+}
+.flow-h2-col-cands { width: 180px; flex-shrink: 0; }
+.flow-h2-col-resolver { flex-shrink: 0; }
+.flow-h2-col-result { flex-shrink: 0; }
+.flow-h2-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.flow-h2-col {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.flow-h2-col-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 500;
+  text-align: center;
+  padding-bottom: 4px;
+}
+.flow-h2-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  justify-content: center;
+}
+.flow-h2-col-resolver .flow-h2-col-body { gap: 8px; align-items: center; }
+.flow-h2-col-result .flow-h2-col-body { align-items: flex-start; }
+
+/* Candidate card — names live here. Border + bg colors are inline-styled
+ * from the per-source palette so each row reads as a distinct origin. */
+.flow-h2-cand {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: oklch(1 0 0);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+  transition: transform 120ms;
+}
+.flow-h2-cand.is-winner {
+  box-shadow: 0 0 0 1px currentColor, var(--shadow-sm);
+}
+.flow-h2-cand-icon {
+  font-size: 14px;
+  text-align: center;
+  line-height: 1;
+}
+.flow-h2-cand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.flow-h2-cand-title {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+.flow-h2-cand-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Resolver chip — dark pill in the middle column, matches the reference
+ * exactly: bold "RESOLVE" title, lowercase resolver name as subtitle. */
+.flow-h2-resolver {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: oklch(0.20 0.02 260);
+  color: oklch(0.99 0 0);
+  box-shadow: var(--shadow-sm);
+  min-width: 96px;
+}
+.flow-h2-resolver.is-warn {
+  background: oklch(0.32 0.13 35);
+}
+.flow-h2-resolver-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.flow-h2-resolver-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: oklch(0.85 0.01 260);
+  letter-spacing: 0.04em;
+}
+.flow-h2-resolver-detail {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  text-align: center;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.flow-h2-resolver-reason {
+  font-size: 10px;
+  color: var(--ink-2);
+  line-height: 1.4;
+  text-align: center;
+  padding: 6px 4px 0;
+  border-top: 1px dashed var(--line);
+  margin-top: 4px;
+  max-width: 160px;
+}
+
+/* Result chip — orange-tinted pill carrying the resolved value. */
+.flow-h2-result {
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: oklch(0.65 0.18 35);
+  color: oklch(0.99 0 0);
+  box-shadow: var(--shadow-sm);
+}
+.flow-h2-result.status-unresolved { background: oklch(0.55 0.05 260); }
+.flow-h2-result-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
 }

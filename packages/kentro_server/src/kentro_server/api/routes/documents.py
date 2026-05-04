@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from kentro.types import (
+    DocumentContentResponse,
     DocumentListResponse,
     DocumentSummary,
     ExtractionStepListResponse,
@@ -77,6 +78,48 @@ def ingest(
         rule_version=ruleset.version,
         smart_model=body.smart_model or settings.kentro_llm_smart_model,
         source_class=body.source_class,
+    )
+
+
+@router.get("/{document_id}/content", response_model=DocumentContentResponse)
+def get_document_content(
+    document_id: UUID,
+    principal: PrincipalDep,
+) -> DocumentContentResponse:
+    """Return the raw blob (markdown text) for a single source document.
+
+    Used by the demo UI's "view source" affordance — click any doc node in the
+    reasoning graph or any row in the ingestion list to see the actual text
+    that was extracted from. Tenant-scoped via the bearer; not ACL-filtered
+    (the source text is the input to extraction, not a derived field value
+    governed by FieldRead rules). 404 keeps tenant-enumeration probes from
+    learning that a UUID belongs to some other tenant.
+    """
+    with principal.store.session() as session:
+        doc = session.exec(select(DocumentRow).where(DocumentRow.id == document_id)).first()
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"document {document_id} not found",
+        )
+    try:
+        blob = principal.store.blobs.get(doc.blob_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"document {document_id} blob missing",
+        ) from exc
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError:
+        # Source corpus is markdown; non-UTF-8 means a pathological ingest.
+        # Return a placeholder rather than 500 so the UI degrades gracefully.
+        text = "[binary content; not displayable]"
+    return DocumentContentResponse(
+        id=str(doc.id),
+        label=doc.label,
+        source_class=doc.source_class,
+        content=text,
     )
 
 

@@ -70,23 +70,7 @@ function StatusPill({ status }) {
   return <span className={`field-status status-${status}`}>{u}</span>;
 }
 
-function fmtFieldValue(fval) {
-  if (!fval) return "—";
-  switch (fval.status) {
-    case "hidden":
-      return "⊘ redacted by ACL";
-    case "unknown":
-      return "—";
-    case "unresolved": {
-      const cands = (fval.candidates || []).map((c) => JSON.stringify(c.value));
-      return cands.join(" ⇄ ") || "(unresolved)";
-    }
-    case "known":
-      return typeof fval.value === "string" ? fval.value : JSON.stringify(fval.value);
-    default:
-      return JSON.stringify(fval.value ?? "—");
-  }
-}
+const fmtFieldValue = K.fmtFieldValue;
 
 // === <AgentPanel> ===========================================================
 // One panel per agent. Each fetches its own GET /entities/{type}/{key} using
@@ -569,11 +553,25 @@ function App() {
   const [csQuery, setCsQuery] = useState({ type: "Customer", key: "Acme Corp" });
   const [drawerPayload, setDrawerPayload] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Two right-edge overlays share the same slot — opening one closes the
+  // other so we never end up with a stack. SourceOverlay shows the raw
+  // document content; EntityOverlay shows global + per-agent views of an
+  // entity record. Both live at app level so they can cover Policy / Access
+  // Matrix, not just the panel they were triggered from.
+  const [sourceDocId, setSourceDocId] = useState(null);
+  const [entityPayload, setEntityPayload] = useState(null);
+  const openSourceDoc = useCallback((id) => {
+    setEntityPayload(null);
+    setSourceDocId(id);
+  }, []);
+  const openEntity = useCallback((p) => {
+    setSourceDocId(null);
+    setEntityPayload(p);
+  }, []);
   const [refresh, setRefresh] = useState(0);
   const bumpRefresh = useCallback(() => setRefresh((n) => n + 1), []);
   const [documents, setDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(true);
-  const [activeDocId, setActiveDocId] = useState(null);
   const [conflictPolicy, setConflictPolicy] = useState("auto");
   const [ruleVersion, setRuleVersion] = useState(0);
   const [lastWriteResult, setLastWriteResult] = useState(null);
@@ -590,10 +588,7 @@ function App() {
       setDocsLoading(true);
       try {
         const docs = await K.api.listDocuments();
-        if (!cancelled) {
-          setDocuments(docs);
-          if (!activeDocId && docs.length > 0) setActiveDocId(docs[0].id);
-        }
+        if (!cancelled) setDocuments(docs);
       } catch {
         if (!cancelled) setDocuments([]);
       } finally {
@@ -805,12 +800,12 @@ function App() {
 
         <K.WorkPanel
           documents={documents}
-          activeDocId={activeDocId}
-          onPickDoc={setActiveDocId}
           onIngestEmail={onIngestEmail}
           pendingDoc={pendingDoc}
           refresh={refresh}
           highlightField={drawerPayload}
+          onOpenDoc={openSourceDoc}
+          onOpenEntity={openEntity}
         />
         <K.AccessMatrixPanel
           entityType="Customer"
@@ -823,6 +818,23 @@ function App() {
         open={drawerOpen}
         payload={drawerPayload}
         onClose={() => setDrawerOpen(false)}
+        shifted={!!entityPayload}
+        documents={documents}
+      />
+      <K.SourceOverlay
+        open={!!sourceDocId}
+        documentId={sourceDocId}
+        onClose={() => setSourceDocId(null)}
+      />
+      <K.EntityOverlay
+        open={!!entityPayload}
+        payload={entityPayload}
+        onClose={() => setEntityPayload(null)}
+        refresh={refresh}
+        onFieldClick={(payload) => {
+          setDrawerPayload(payload);
+          setDrawerOpen(true);
+        }}
       />
       <K.EscalationToast />
     </div>

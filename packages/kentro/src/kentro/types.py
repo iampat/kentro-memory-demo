@@ -137,6 +137,11 @@ class LineageRecord(BaseModel):
     written_by_agent_id: str
     rule_version: int
     extraction_step_id: UUID | None = None
+    # Decoded value the SOURCE wrote at this lineage point. Multiple sources
+    # may corroborate the same resolved value — but each one wrote its own
+    # candidate value, and a faithful lineage must surface that. Optional so
+    # historical records that pre-date this field stay readable.
+    value: Any | None = None
 
 
 # === Field value carriers (read-time) ===
@@ -358,6 +363,22 @@ class DocumentListResponse(BaseModel):
     documents: tuple[DocumentSummary, ...] = ()
 
 
+class DocumentContentResponse(BaseModel):
+    """Response shape for `GET /documents/{id}/content`.
+
+    Carries the raw markdown (or other text) blob for a single source document
+    so the demo UI can show "what was actually extracted from". Tenant-scoped
+    via the bearer; not ACL-filtered (the source text is the input to
+    extraction, not a derived field value).
+    """
+
+    model_config = ConfigDict(frozen=True)
+    id: str
+    label: str | None = None
+    source_class: str | None = None
+    content: str
+
+
 # === Extraction-step view (added 2026-05-03 for the demo UI's ingestion panel) ===
 #
 # The demo UI's bottom-left "Ingestion pipeline" panel renders a per-document
@@ -473,6 +494,7 @@ __all__ = [
     "AutoResolverSpec",
     "Conflict",
     "ConflictRule",
+    "DocumentContentResponse",
     "DocumentListResponse",
     "DocumentSummary",
     "Entity",

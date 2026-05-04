@@ -271,6 +271,7 @@ def _register_tools(mcp: FastMCP) -> None:
             entity_key=entity_key,
             resolver=AutoResolverSpec(),
             llm=ctx.llm,
+            bypass_acl=ctx.principal.is_admin,
         )
         return record.model_dump(mode="json")
 
