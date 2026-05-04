@@ -29,6 +29,7 @@ from kentro_server.api import (
     memory_router,
     rules_router,
     schema_router,
+    viz_router,
 )
 from kentro_server.core.events import EventBus
 from kentro_server.demo import AuditLog, Customer, Deal, Person, initial_demo_ruleset
@@ -184,6 +185,7 @@ app.include_router(schema_router)
 app.include_router(memory_router)
 app.include_router(demo_router)
 app.include_router(events_router)
+app.include_router(viz_router)
 
 # Mount the lazy delegator; lifespan attaches the real MCP sub-app each cycle.
 app.mount("/mcp", _mcp_mount)

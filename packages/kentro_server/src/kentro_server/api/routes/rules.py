@@ -9,7 +9,9 @@ caller can decide whether to apply automatically or surface a clarification.
 import logging
 
 from fastapi import APIRouter
+from kentro.rules import render_rule, render_rule_as_rego
 from kentro.types import NLResponse, RuleSet
+from pydantic import BaseModel, ConfigDict
 
 from kentro_server.api.auth import AdminPrincipalDep, PrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, TenantRegistryDep
@@ -65,3 +67,40 @@ def apply_rules(body: ApplyRulesetRequest, principal: AdminPrincipalDep) -> Appl
 @router.get("/active", response_model=RuleSet)
 def get_active(principal: PrincipalDep) -> RuleSet:
     return load_active_ruleset(principal.store)
+
+
+class RenderedRule(BaseModel):
+    """One rule rendered both human-readable and as a Rego-flavored snippet."""
+
+    model_config = ConfigDict(frozen=True)
+    summary: str
+    rego: str
+
+
+class RenderedRulesetResponse(BaseModel):
+    """Response shape for `GET /rules/active/rendered` — drives the policy editor.
+
+    Pairs each `Rule` with `render_rule(...)` (one-line summary) and
+    `render_rule_as_rego(...)` (multi-line Rego-style snippet for the expandable
+    `<pre>` in the UI). Order matches the active ruleset 1:1.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    version: int
+    rules: tuple[RenderedRule, ...] = ()
+
+
+@router.get("/active/rendered", response_model=RenderedRulesetResponse)
+def get_active_rendered(principal: PrincipalDep) -> RenderedRulesetResponse:
+    """Live ruleset paired with human-readable + Rego-flavored renderings.
+
+    The UI's policy editor uses `summary` for the row label and `rego` for the
+    expandable code block. Server-side rendering keeps the JS layer free of
+    rule-shape knowledge; if a new `Rule` variant lands, only `kentro.rules`
+    needs updating and the UI picks it up automatically.
+    """
+    ruleset = load_active_ruleset(principal.store)
+    rendered = tuple(
+        RenderedRule(summary=render_rule(r), rego=render_rule_as_rego(r)) for r in ruleset.rules
+    )
+    return RenderedRulesetResponse(version=ruleset.version, rules=rendered)

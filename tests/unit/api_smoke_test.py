@@ -865,3 +865,151 @@ def test_ingest_document_via_fake_llm(client: TestClient, fake_llm: FakeLLM) -> 
         raise AssertionError(f"ingest failed: {r.status_code} {r.text}")
     if not r.json()["entities"]:
         raise AssertionError(f"ingest should produce entities: {r.json()!r}")
+
+
+# === PR 14: extraction-step trace + viz endpoints ====================================
+#
+# `GET /documents/{id}/extraction-steps`, `GET /viz/access-matrix`, `GET /viz/graph`
+# all back the prototype-match UI. Each is exercised here with a single ingest
+# so the wire shapes (and tenant scoping) are covered.
+
+
+def _seed_ingested_doc(client: TestClient, fake_llm: FakeLLM) -> str:
+    """Register a Customer schema, grant ACL, ingest one doc, return its UUID."""
+    client.post(
+        "/schema/register",
+        headers=_admin(),
+        json={
+            "type_defs": [
+                EntityTypeDef(
+                    name="Customer",
+                    fields=(
+                        FieldDef(name="name", type_str="str"),
+                        FieldDef(name="deal_size", type_str="float | None"),
+                    ),
+                ).model_dump(mode="json")
+            ]
+        },
+    )
+    _grant_access_for_ingestion(client)
+    fake_llm.extraction_result = ExtractionResult(
+        entities=(
+            ExtractedEntity(
+                entity_type="Customer",
+                key="Acme",
+                fields=(
+                    ExtractedField(field_name="name", value_json='"Acme Corp"'),
+                    ExtractedField(field_name="deal_size", value_json="250000"),
+                ),
+            ),
+        )
+    )
+    r = client.post(
+        "/documents",
+        headers=_admin(),
+        json={"content": "Acme renewal at $250K.", "label": "call.md", "source_class": "verbal"},
+    )
+    if r.status_code != 200:
+        raise AssertionError(f"setup ingest failed: {r.status_code} {r.text}")
+    docs = client.get("/documents", headers=_admin()).json()["documents"]
+    if not docs:
+        raise AssertionError("expected at least one ingested document for setup")
+    return docs[0]["id"]
+
+
+def test_list_extraction_steps_after_ingest(client: TestClient, fake_llm: FakeLLM) -> None:
+    """`GET /documents/{id}/extraction-steps` surfaces the LLM call that
+    produced the doc's writes, with `produced_writes` counting distinct fields."""
+    doc_id = _seed_ingested_doc(client, fake_llm)
+    r = client.get(f"/documents/{doc_id}/extraction-steps", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"list-steps failed: {r.status_code} {r.text}")
+    body = r.json()
+    if body["document_id"] != doc_id:
+        raise AssertionError(f"document_id echo mismatch: {body!r}")
+    if len(body["steps"]) != 1:
+        raise AssertionError(f"expected exactly 1 extraction step, got {body!r}")
+    step = body["steps"][0]
+    if step["produced_writes"] != 2:
+        raise AssertionError(f"expected 2 produced writes (name+deal_size), got {step!r}")
+    if step["name"] != "extract_entities":
+        raise AssertionError(f"step name mismatch: {step!r}")
+
+
+def test_extraction_steps_404_on_unknown_doc(client: TestClient) -> None:
+    """A UUID for a nonexistent document → 404 (not a probe-leak 200 with empty list)."""
+    r = client.get(f"/documents/{uuid4()}/extraction-steps", headers=_admin())
+    if r.status_code != 404:
+        raise AssertionError(f"expected 404 for unknown doc, got {r.status_code}: {r.text}")
+
+
+def test_viz_access_matrix_returns_cells(client: TestClient, fake_llm: FakeLLM) -> None:
+    """`GET /viz/access-matrix?entity_type=Customer` returns one cell per
+    (agent, field), with read/write/visible booleans matching the active ruleset.
+
+    The test fixture's tenants.json has two agents (`ingestion_agent`,
+    `sales`); both should appear in `agents`. `_grant_access_for_ingestion`
+    grants ingestion_agent read on Customer.name and Customer.deal_size, but
+    not sales — assert the asymmetry.
+    """
+    _seed_ingested_doc(client, fake_llm)  # registers Customer + applies ACL
+    r = client.get("/viz/access-matrix?entity_type=Customer", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"matrix failed: {r.status_code} {r.text}")
+    body = r.json()
+    if body["entity_type"] != "Customer":
+        raise AssertionError(f"entity_type echo mismatch: {body!r}")
+    agents = set(body["agents"])
+    if "ingestion_agent" not in agents or "sales" not in agents:
+        raise AssertionError(f"both agents must be in matrix, got {agents}")
+    by_key = {(c["agent_id"], c["field_name"]): c for c in body["cells"]}
+    ing_name = by_key.get(("ingestion_agent", "name"))
+    if ing_name is None or not ing_name["read"]:
+        raise AssertionError(f"ingestion_agent should have read on Customer.name: {ing_name!r}")
+    sales_name = by_key.get(("sales", "name"))
+    if sales_name is None or sales_name["read"]:
+        raise AssertionError(
+            f"sales should NOT have read on Customer.name (no rule applied): {sales_name!r}"
+        )
+
+
+def test_viz_graph_returns_doc_entity_edges(client: TestClient, fake_llm: FakeLLM) -> None:
+    """`GET /viz/graph` returns nodes + edges; one edge per distinct
+    (doc, entity, field, agent) write tuple."""
+    doc_id = _seed_ingested_doc(client, fake_llm)
+    r = client.get("/viz/graph", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"graph failed: {r.status_code} {r.text}")
+    body = r.json()
+    doc_node_ids = {n["id"] for n in body["nodes"] if n["kind"] == "document"}
+    ent_node_ids = {n["id"] for n in body["nodes"] if n["kind"] == "entity"}
+    if f"doc:{doc_id}" not in doc_node_ids:
+        raise AssertionError(f"document node missing from graph: {body!r}")
+    if "ent:Customer:Acme" not in ent_node_ids:
+        raise AssertionError(f"entity node missing from graph: {body!r}")
+    edges = [e for e in body["edges"] if e["target"] == "ent:Customer:Acme"]
+    if len(edges) != 2:  # name + deal_size
+        raise AssertionError(f"expected 2 edges (name+deal_size), got {edges!r}")
+    fields = {e["field_name"] for e in edges}
+    if fields != {"name", "deal_size"}:
+        raise AssertionError(f"expected name+deal_size, got {fields}")
+
+
+def test_rules_active_rendered_pairs_summary_and_rego(
+    client: TestClient, fake_llm: FakeLLM
+) -> None:
+    """`GET /rules/active/rendered` pairs each rule with `render_rule` summary +
+    `render_rule_as_rego` snippet."""
+    _seed_ingested_doc(client, fake_llm)  # applies a ruleset via _grant_access_for_ingestion
+    r = client.get("/rules/active/rendered", headers=_admin())
+    if r.status_code != 200:
+        raise AssertionError(f"rendered ruleset failed: {r.status_code} {r.text}")
+    body = r.json()
+    if not body["rules"]:
+        raise AssertionError(f"expected at least one rendered rule, got {body!r}")
+    rendered = body["rules"][0]
+    if "summary" not in rendered or "rego" not in rendered:
+        raise AssertionError(f"each rendered rule must carry summary+rego: {rendered!r}")
+    # Rego always starts with `package kentro.` for any of the four rule types.
+    if not rendered["rego"].startswith("package kentro."):
+        raise AssertionError(f"rego rendering looks wrong: {rendered['rego']!r}")

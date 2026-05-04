@@ -358,7 +358,117 @@ class DocumentListResponse(BaseModel):
     documents: tuple[DocumentSummary, ...] = ()
 
 
+# === Extraction-step view (added 2026-05-03 for the demo UI's ingestion panel) ===
+#
+# The demo UI's bottom-left "Ingestion pipeline" panel renders a per-document
+# trace of every LLM call that produced its lineage. A document can have one
+# extraction step (current ingestor.py shape) or multiple (future multi-pass
+# extraction). Each step is keyed back to the document via the FieldWriteRow
+# bridge: rows whose `source_document_id == doc.id` carry their step id.
+
+
+class ExtractionStepView(BaseModel):
+    """One LLM extraction step that contributed at least one field write to a
+    given source document.
+
+    Fields beyond the existing `ExtractionStep` SDK type:
+    - `id` — UUID as string (JSON friendliness).
+    - `created_at` — ISO8601 datetime string.
+    - `produced_writes` — count of distinct (entity_type, entity_key, field_name)
+      tuples this step wrote, surfaced so the UI can show "extracted N facts"
+      without per-field follow-up queries.
+
+    `tokens_in` / `tokens_out` are 0 in the current ingestor (the LLM client's
+    structured-output path doesn't surface token counts yet); kept in the wire
+    shape for forward-compat with the eventual instrumented path.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    id: str
+    document_id: str
+    name: str
+    model: str
+    input_excerpt: str
+    output_summary: str
+    tokens_in: int
+    tokens_out: int
+    latency_ms: int
+    created_at: str
+    produced_writes: int = 0
+
+
+class ExtractionStepListResponse(BaseModel):
+    """Response shape for `GET /documents/{document_id}/extraction-steps`."""
+
+    model_config = ConfigDict(frozen=True)
+    document_id: str
+    steps: tuple[ExtractionStepView, ...] = ()
+
+
+# === Viz endpoints (added 2026-05-03 for the demo UI's right column) ===
+#
+# `GET /viz/access-matrix?entity_type=X` and `GET /viz/graph` both return JSON
+# shaped to drive a specific UI panel. Both are tenant-scoped via the bearer.
+
+
+class AccessMatrixCellView(BaseModel):
+    """One cell of `GET /viz/access-matrix` — flat shape for the table renderer."""
+
+    model_config = ConfigDict(frozen=True)
+    agent_id: str
+    entity_type: str
+    field_name: str
+    read: bool
+    write: bool
+    visible: bool
+
+
+class AccessMatrixView(BaseModel):
+    """Response shape for `GET /viz/access-matrix?entity_type=X`.
+
+    `agents` and `fields` are the row/column labels the renderer uses; `cells`
+    is a flat list keyed on (agent_id, entity_type, field_name) — easier for
+    the JS consumer to lookup than a nested matrix.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    entity_type: str
+    fields: tuple[str, ...]
+    agents: tuple[str, ...]
+    cells: tuple[AccessMatrixCellView, ...]
+
+
+class GraphNode(BaseModel):
+    """One node in `GET /viz/graph` — either a document or an entity."""
+
+    model_config = ConfigDict(frozen=True)
+    id: str
+    kind: Literal["document", "entity"]
+    label: str
+    sub: str | None = None
+
+
+class GraphEdge(BaseModel):
+    """One edge in `GET /viz/graph` — directed `document → entity` per FieldWriteRow."""
+
+    model_config = ConfigDict(frozen=True)
+    source: str
+    target: str
+    field_name: str
+    agent_id: str
+
+
+class GraphView(BaseModel):
+    """Response shape for `GET /viz/graph` — entity-document bipartite graph."""
+
+    model_config = ConfigDict(frozen=True)
+    nodes: tuple[GraphNode, ...] = ()
+    edges: tuple[GraphEdge, ...] = ()
+
+
 __all__ = [
+    "AccessMatrixCellView",
+    "AccessMatrixView",
     "Agent",
     "AutoResolverSpec",
     "Conflict",
@@ -372,11 +482,16 @@ __all__ = [
     "EntityTypeDef",
     "EntityVisibilityRule",
     "ExtractionStep",
+    "ExtractionStepListResponse",
+    "ExtractionStepView",
     "FieldDef",
     "FieldReadRule",
     "FieldStatus",
     "FieldValue",
     "FieldValueCandidate",
+    "GraphEdge",
+    "GraphNode",
+    "GraphView",
     "IngestionResult",
     "LatestWriteResolverSpec",
     "LineageRecord",
