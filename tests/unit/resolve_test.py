@@ -208,6 +208,32 @@ def test_auto_resolver_falls_back_to_latest_write_when_no_rule() -> None:
         )
 
 
+def test_auto_resolver_handles_conflict_rule_wrapping_auto_spec() -> None:
+    """Defensive: a ConflictRule(resolver=AutoResolverSpec()) would otherwise dispatch
+    to itself and fall through to TypeError. The dispatcher must treat that case as
+    "no specific rule" and use the LatestWriteResolver fallback."""
+    transcript, email = _demo_conflict_candidates()
+    bogus_rule = ConflictRule(
+        entity_type="Customer",
+        field_name="deal_size",
+        resolver=AutoResolverSpec(),  # the meaningless self-reference
+    )
+    out = resolve(
+        candidates=[transcript, email],
+        spec=AutoResolverSpec(),
+        ruleset=RuleSet(rules=(bogus_rule,), version=1),
+        entity_type="Customer",
+        field_name="deal_size",
+        llm=OfflineLLMClient(),
+    )
+    if out.status != FieldStatus.KNOWN or out.winner is not email:
+        raise AssertionError(
+            f"AutoResolver-in-ConflictRule must fall back to LatestWrite, got {out}"
+        )
+    if not isinstance(out.resolver_used, LatestWriteResolverSpec):
+        raise AssertionError(f"resolver_used should record the fallback, got {out.resolver_used}")
+
+
 def test_auto_resolver_dispatches_to_skill_resolver_via_rule() -> None:
     transcript, email = _demo_conflict_candidates()
     out = resolve(

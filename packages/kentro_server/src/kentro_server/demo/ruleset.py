@@ -18,7 +18,6 @@ values that the write path would silently drop).
 """
 
 from kentro.types import (
-    AutoResolverSpec,
     ConflictRule,
     EntityVisibilityRule,
     FieldReadRule,
@@ -92,18 +91,13 @@ def initial_demo_ruleset() -> RuleSet:
         ),
         # === Conflict resolution (Scene 1 baseline) =====================
         # Per `demo.md` cell 12: under the initial mechanical rule, latest-write wins.
-        # Scene 4 swaps this for a SkillResolver via the live policy editor.
+        # Scene 4 swaps this for a SkillResolver via the live policy editor. Other
+        # fields fall through to AutoResolver in the read path → AutoResolver in
+        # turn falls back to LatestWriteResolver when no ConflictRule matches.
         ConflictRule(
             entity_type="Customer",
             field_name="deal_size",
             resolver=LatestWriteResolverSpec(),
-        ),
-        # Auto-resolver is the default for any other conflicting field — falls back
-        # to LatestWriteResolver when no specific ConflictRule matches.
-        ConflictRule(
-            entity_type="Customer",
-            field_name="contact",
-            resolver=AutoResolverSpec(),
         ),
     )
     return RuleSet(rules=rules)
