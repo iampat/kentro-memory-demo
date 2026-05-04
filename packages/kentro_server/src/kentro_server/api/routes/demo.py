@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict
 
 from kentro_server.api.auth import AdminPrincipalDep
 from kentro_server.api.deps import LLMClientDep, SchemaRegistryDep, SettingsDep, TenantRegistryDep
+from kentro_server.core.resolvers import apply_resolver_policies
 from kentro_server.core.rules import apply_ruleset
 from kentro_server.demo import (
     AuditLog,
@@ -28,6 +29,7 @@ from kentro_server.demo import (
     Deal,
     Person,
     infer_source_class,
+    initial_demo_resolvers,
     initial_demo_ruleset,
 )
 from kentro_server.extraction import ingest_document
@@ -135,12 +137,18 @@ def seed_demo(
         schema.register(td)
         registered.append(td.name)
 
-    # 2. Apply the canonical Scene-1 ruleset.
+    # 2. Apply the canonical Scene-1 ruleset + resolver policies.
     ruleset = initial_demo_ruleset()
     rule_version = apply_ruleset(
         principal.store,
         rules=ruleset.rules,
         summary="initial demo ruleset (POST /demo/seed)",
+    )
+    resolvers = initial_demo_resolvers()
+    rule_version = apply_resolver_policies(
+        principal.store,
+        policies=resolvers.policies,
+        summary="initial demo resolvers (POST /demo/seed)",
     )
 
     # 3. Ingest every markdown file in examples/synthetic_corpus/.

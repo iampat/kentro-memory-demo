@@ -80,8 +80,9 @@ class RenderedRule(BaseModel):
     only (no `package` line) so the UI can group rules by package and emit one
     header per group instead of repeating it per rule.
 
-    `package` is the Rego package name (`kentro.access` for FieldRead/Write/
-    EntityVisibility, `kentro.resolve` for ConflictRule). UI groups by it.
+    `package` is the Rego package name. With ConflictRule retired (PR 35),
+    every Rule now lives in `kentro.access`; resolvers have their own
+    `/resolvers/active/rendered` endpoint.
     """
 
     model_config = ConfigDict(frozen=True)

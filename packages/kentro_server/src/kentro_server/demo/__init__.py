@@ -9,7 +9,7 @@ Four entity types match the demo prototype's seed (`Customer`, `Person`, `Deal`,
 `AuditLog`); the prototype's UI columns expect all four to be registered.
 """
 
-from kentro_server.demo.ruleset import initial_demo_ruleset
+from kentro_server.demo.ruleset import initial_demo_resolvers, initial_demo_ruleset
 from kentro_server.demo.schemas import AuditLog, Customer, Deal, Person
 
 
@@ -51,5 +51,6 @@ __all__ = [
     "Deal",
     "Person",
     "infer_source_class",
+    "initial_demo_resolvers",
     "initial_demo_ruleset",
 ]

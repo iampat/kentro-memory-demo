@@ -3,6 +3,9 @@
 Pure-function tests — `FieldWriteRow` instances are constructed directly without a
 session. The LLMClient is the OfflineLLMClient stub by default; one test substitutes
 a fake decision-emitting client to exercise the SkillResolver KNOWN path.
+
+PR 35: resolver lookup now reads `ResolverPolicySet` (sibling to `RuleSet`),
+not `ConflictRule`s embedded in the ACL ruleset.
 """
 
 from dataclasses import dataclass
@@ -12,12 +15,12 @@ from uuid import uuid4
 import pytest
 from kentro.types import (
     AutoResolverSpec,
-    ConflictRule,
     FieldStatus,
     LatestWriteResolverSpec,
     PreferAgentResolverSpec,
     RawResolverSpec,
-    RuleSet,
+    ResolverPolicy,
+    ResolverPolicySet,
     SkillResolverSpec,
 )
 from kentro_server.core.resolve import resolve
@@ -45,17 +48,21 @@ def _w(value_json: str, agent_id: str = "ingestion_agent", at: datetime = T0) ->
     )
 
 
-def _empty_ruleset() -> RuleSet:
-    return RuleSet(rules=(), version=1)
+def _empty_policies() -> ResolverPolicySet:
+    return ResolverPolicySet(policies=(), version=1)
 
 
-def _ruleset_with_skill_conflict_rule() -> RuleSet:
-    rule = ConflictRule(
-        entity_type="Customer",
-        field_name="deal_size",
-        resolver=SkillResolverSpec(prompt="written outweighs verbal"),
+def _policies_with_skill_for_deal_size() -> ResolverPolicySet:
+    return ResolverPolicySet(
+        policies=(
+            ResolverPolicy(
+                entity_type="Customer",
+                field_name="deal_size",
+                resolver=SkillResolverSpec(prompt="written outweighs verbal"),
+            ),
+        ),
+        version=2,
     )
-    return RuleSet(rules=(rule,), version=2)
 
 
 # === Fast paths ===
@@ -66,7 +73,7 @@ def test_single_candidate_returns_known_with_that_winner() -> None:
     out = resolve(
         candidates=[write],
         spec=AutoResolverSpec(),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -82,8 +89,8 @@ def test_corroboration_many_writes_one_distinct_value() -> None:
     b = _w('"Acme"', at=T1)
     out = resolve(
         candidates=[a, b],
-        spec=AutoResolverSpec(),  # would dispatch but corroboration short-circuits
-        ruleset=_empty_ruleset(),
+        spec=AutoResolverSpec(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="name",
         llm=OfflineLLMClient(),
@@ -101,7 +108,7 @@ def test_resolve_raises_on_empty_candidates() -> None:
         resolve(
             candidates=[],
             spec=RawResolverSpec(),
-            ruleset=_empty_ruleset(),
+            resolver_policies=_empty_policies(),
             entity_type="Customer",
             field_name="deal_size",
             llm=OfflineLLMClient(),
@@ -122,7 +129,7 @@ def test_raw_resolver_returns_unresolved_with_both_candidates() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=RawResolverSpec(),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -143,7 +150,7 @@ def test_latest_write_picks_email() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=LatestWriteResolverSpec(),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -160,7 +167,7 @@ def test_prefer_agent_picks_matching_when_match_exists() -> None:
     out = resolve(
         candidates=[transcript, email_correction],
         spec=PreferAgentResolverSpec(agent_id="manual_sales"),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -174,7 +181,7 @@ def test_prefer_agent_no_match_returns_unresolved() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=PreferAgentResolverSpec(agent_id="auditor"),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -190,12 +197,12 @@ def test_prefer_agent_no_match_returns_unresolved() -> None:
 # === AutoResolver dispatch ===
 
 
-def test_auto_resolver_falls_back_to_latest_write_when_no_rule() -> None:
+def test_auto_resolver_falls_back_to_latest_write_when_no_policy() -> None:
     transcript, email = _demo_conflict_candidates()
     out = resolve(
         candidates=[transcript, email],
         spec=AutoResolverSpec(),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -208,38 +215,38 @@ def test_auto_resolver_falls_back_to_latest_write_when_no_rule() -> None:
         )
 
 
-def test_auto_resolver_handles_conflict_rule_wrapping_auto_spec() -> None:
-    """Defensive: a ConflictRule(resolver=AutoResolverSpec()) would otherwise dispatch
-    to itself and fall through to TypeError. The dispatcher must treat that case as
-    "no specific rule" and use the LatestWriteResolver fallback."""
+def test_auto_resolver_handles_policy_wrapping_auto_spec() -> None:
+    """Defensive: a ResolverPolicy(resolver=AutoResolverSpec()) would otherwise
+    dispatch to itself and fall through to TypeError. The dispatcher must treat
+    that case as 'no specific policy' and use the LatestWrite fallback."""
     transcript, email = _demo_conflict_candidates()
-    bogus_rule = ConflictRule(
+    bogus = ResolverPolicy(
         entity_type="Customer",
         field_name="deal_size",
-        resolver=AutoResolverSpec(),  # the meaningless self-reference
+        resolver=AutoResolverSpec(),
     )
     out = resolve(
         candidates=[transcript, email],
         spec=AutoResolverSpec(),
-        ruleset=RuleSet(rules=(bogus_rule,), version=1),
+        resolver_policies=ResolverPolicySet(policies=(bogus,), version=1),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
     )
     if out.status != FieldStatus.KNOWN or out.winner is not email:
         raise AssertionError(
-            f"AutoResolver-in-ConflictRule must fall back to LatestWrite, got {out}"
+            f"AutoResolver-in-ResolverPolicy must fall back to LatestWrite, got {out}"
         )
     if not isinstance(out.resolver_used, LatestWriteResolverSpec):
         raise AssertionError(f"resolver_used should record the fallback, got {out.resolver_used}")
 
 
-def test_auto_resolver_dispatches_to_skill_resolver_via_rule() -> None:
+def test_auto_resolver_dispatches_to_skill_resolver_via_policy() -> None:
     transcript, email = _demo_conflict_candidates()
     out = resolve(
         candidates=[transcript, email],
         spec=AutoResolverSpec(),
-        ruleset=_ruleset_with_skill_conflict_rule(),
+        resolver_policies=_policies_with_skill_for_deal_size(),
         entity_type="Customer",
         field_name="deal_size",
         llm=OfflineLLMClient(),
@@ -296,7 +303,7 @@ def test_skill_resolver_known_when_decision_picks_existing_value() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=SkillResolverSpec(prompt="written outweighs verbal"),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=fake,
@@ -320,7 +327,7 @@ def test_skill_resolver_unresolved_when_decision_returns_none() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=SkillResolverSpec(prompt="written outweighs verbal"),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=fake,
@@ -332,9 +339,9 @@ def test_skill_resolver_unresolved_when_decision_returns_none() -> None:
 
 
 def test_skill_resolver_passes_decision_actions_through_resolved_field_value() -> None:
-    """PR 10-5: a SkillResolver decision can carry workflow `actions`. The
-    resolver must propagate them onto `ResolvedFieldValue.actions` so the
-    read-path orchestrator can dispatch them through the ACL gate."""
+    """A SkillResolver decision can carry workflow `actions`. The resolver
+    must propagate them onto `ResolvedFieldValue.actions` so the read-path
+    orchestrator can dispatch them through the ACL gate."""
     from kentro_server.skills.llm_client import (  # noqa: PLC0415 — test-local
         NotifyAction,
         WriteEntityAction,
@@ -382,7 +389,7 @@ def test_skill_resolver_passes_decision_actions_through_resolved_field_value() -
     out = resolve(
         candidates=[transcript, email],
         spec=SkillResolverSpec(prompt="written outweighs verbal"),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=_ScriptedLLM(),
@@ -405,7 +412,7 @@ def test_skill_resolver_unresolved_when_decision_picks_unknown_value() -> None:
     out = resolve(
         candidates=[transcript, email],
         spec=SkillResolverSpec(prompt="..."),
-        ruleset=_empty_ruleset(),
+        resolver_policies=_empty_policies(),
         entity_type="Customer",
         field_name="deal_size",
         llm=fake,

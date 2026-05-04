@@ -1184,12 +1184,14 @@ window.K.PolicyOverlay = function PolicyOverlay({ open, entityType, onClose, shi
     setApplying(true);
     setError(null);
     try {
-      const current = await K.api.getRules();
-      const merged = {
+      // PR 35: server-side `apply_ruleset` does UPSERT — send only the
+      // newly-parsed rules and the server merges them into the active
+      // ruleset by (kind, agent, type, field|key).
+      const onlyNew = {
         version: 0,
-        rules: [...(current.rules || []), ...(parsed.parsed_ruleset.rules || [])],
+        rules: parsed.parsed_ruleset.rules || [],
       };
-      const result = await K.api.applyRules(merged, draft);
+      const result = await K.api.applyRules(onlyNew, draft);
       setDraft("");
       setParsed(null);
       await reload();
@@ -1472,7 +1474,24 @@ window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifte
         </div>
         <div className="drawer-body">
           {loading && <p style={{ color: "var(--ink-3)" }}>loading…</p>}
-          {!loading && fval && <LineageFlow fval={fval} docById={docById} />}
+          {!loading && fval && (
+            <LineageFlow
+              fval={fval}
+              docById={docById}
+              entityType={payload.entity_type}
+              fieldName={fname}
+              onApplied={() => {
+                // Re-fetch the field after a resolver change so the flow
+                // (RESOLVER chip + RESULT) reflects the new winner.
+                if (open && payload) {
+                  K.api
+                    .readEntityAs(payload.agent_id, payload.entity_type, payload.entity_key)
+                    .then((r) => setRecord(r))
+                    .catch(() => setRecord(null));
+                }
+              }}
+            />
+          )}
           {!loading && !fval && (
             <p style={{ color: "var(--ink-3)" }}>
               No lineage available for this field (you may not have read access).
@@ -1502,7 +1521,7 @@ window.K.LineageDrawer = function LineageDrawer({ open, payload, onClose, shifte
 // corroborating it), `unresolved` (multiple distinct candidates), `hidden`
 // (ACL-redacted), `unknown` (no writes yet). Connectors carry animated dots
 // so the read pipeline looks alive even when the data is settled.
-function LineageFlow({ fval, docById }) {
+function LineageFlow({ fval, docById, entityType, fieldName, onApplied }) {
   if (fval.status === "hidden") {
     return (
       <div className="flow flow-stub">
@@ -1602,7 +1621,134 @@ function LineageFlow({ fval, docById }) {
       reason={fval.reason}
       resultLabel={isKnown ? K.fmtFieldValue(fval) : "no winner"}
       resultStatus={fval.status}
+      entityType={entityType}
+      fieldName={fieldName}
+      onApplied={onApplied}
     />
+  );
+}
+
+// Inline editor that swaps the resolver for one (entity_type, field_name)
+// pair. Lives directly under the RESOLVER chip in the lineage drawer; click
+// the chip to toggle. Loads the active policy on open, lets the user pick
+// a resolver type + type-specific fields, then POSTs to /resolvers/apply.
+// On success, parent re-fetches the entity record so the flow re-renders
+// with the new winner highlighted.
+function ResolverEditor({ entityType, fieldName, onClose, onApplied }) {
+  const [resolverType, setResolverType] = useState("latest_write");
+  const [agentId, setAgentId] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Load the active policy for this (type, field) so the editor opens
+  // pre-populated with the current resolver. Fall through to LatestWrite if
+  // no policy exists.
+  useEffect(() => {
+    let cancelled = false;
+    K.api
+      .getResolvers()
+      .then((set) => {
+        if (cancelled) return;
+        const policy = (set.policies || []).find(
+          (p) => p.entity_type === entityType && p.field_name === fieldName
+        );
+        if (!policy) return;
+        const r = policy.resolver || {};
+        setResolverType(r.type || "latest_write");
+        if (r.type === "prefer_agent") setAgentId(r.agent_id || "");
+        if (r.type === "skill") setPrompt(r.prompt || "");
+      })
+      .catch(() => {
+        // ignore — defaults stand
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entityType, fieldName]);
+
+  const apply = async () => {
+    setApplying(true);
+    setError(null);
+    try {
+      const resolver = { type: resolverType };
+      if (resolverType === "prefer_agent") {
+        if (!agentId.trim()) {
+          setError("agent_id is required for prefer_agent");
+          setApplying(false);
+          return;
+        }
+        resolver.agent_id = agentId.trim();
+      }
+      if (resolverType === "skill") {
+        if (!prompt.trim()) {
+          setError("prompt is required for skill resolver");
+          setApplying(false);
+          return;
+        }
+        resolver.prompt = prompt.trim();
+      }
+      await K.api.applyResolvers(
+        [{ entity_type: entityType, field_name: fieldName, resolver }],
+        `update resolver for ${entityType}.${fieldName}`
+      );
+      onApplied?.();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="resolver-editor">
+      <div className="resolver-editor-head">
+        <span className="resolver-editor-title">Edit resolver</span>
+        <button onClick={onClose} className="resolver-editor-close" aria-label="Close">
+          ×
+        </button>
+      </div>
+      <label className="resolver-editor-row">
+        <span className="resolver-editor-label">type</span>
+        <select value={resolverType} onChange={(e) => setResolverType(e.target.value)}>
+          <option value="latest_write">latest_write — newest wins</option>
+          <option value="prefer_agent">prefer_agent — winner from a chosen agent</option>
+          <option value="skill">skill — LLM picks per a domain prompt</option>
+          <option value="raw">raw — never pick a winner</option>
+          <option value="auto">auto — fall through to default</option>
+        </select>
+      </label>
+      {resolverType === "prefer_agent" && (
+        <label className="resolver-editor-row">
+          <span className="resolver-editor-label">agent_id</span>
+          <input
+            value={agentId}
+            onChange={(e) => setAgentId(e.target.value)}
+            placeholder="e.g. sales"
+          />
+        </label>
+      )}
+      {resolverType === "skill" && (
+        <label className="resolver-editor-row resolver-editor-row-prompt">
+          <span className="resolver-editor-label">prompt</span>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="written sources outweigh verbal"
+            rows={2}
+          />
+        </label>
+      )}
+      {error && <div className="resolver-editor-error">{error}</div>}
+      <div className="resolver-editor-actions">
+        <button onClick={onClose} className="secondary" disabled={applying}>
+          cancel
+        </button>
+        <button onClick={apply} className="primary" disabled={applying}>
+          {applying ? "applying…" : "apply"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1622,7 +1768,11 @@ function LineageFlowLayout({
   reason,
   resultLabel,
   resultStatus,
+  entityType,
+  fieldName,
+  onApplied,
 }) {
+  const [editorOpen, setEditorOpen] = useState(false);
   const containerRef = useRef(null);
   const cardRefs = useRef([]);
   const resolverRef = useRef(null);
@@ -1731,13 +1881,36 @@ function LineageFlowLayout({
         <div className="flow-h2-col-body">
           <div
             ref={resolverRef}
-            className={K.cls("flow-h2-resolver", isKnown ? "is-ok" : "is-warn")}
+            className={K.cls(
+              "flow-h2-resolver",
+              isKnown ? "is-ok" : "is-warn",
+              entityType && fieldName && "is-clickable"
+            )}
+            onClick={() => {
+              if (entityType && fieldName) setEditorOpen((v) => !v);
+            }}
+            title={
+              entityType && fieldName
+                ? `click to edit resolver for ${entityType}.${fieldName}`
+                : undefined
+            }
           >
             <div className="flow-h2-resolver-title">RESOLVE</div>
             <div className="flow-h2-resolver-sub">{resolverName}</div>
           </div>
           <div className="flow-h2-resolver-detail">{resolverDetail}</div>
           {reason && <div className="flow-h2-resolver-reason">{reason}</div>}
+          {editorOpen && entityType && fieldName && (
+            <ResolverEditor
+              entityType={entityType}
+              fieldName={fieldName}
+              onClose={() => setEditorOpen(false)}
+              onApplied={() => {
+                setEditorOpen(false);
+                onApplied?.();
+              }}
+            />
+          )}
         </div>
       </div>
 

@@ -49,7 +49,9 @@ def _initial_ruleset() -> RuleSet:
         # Sales — writes
         WriteRule(agent_id=SALES, entity_type="Customer", field_name="deal_size", allowed=True),
         WriteRule(agent_id=SALES, entity_type="Customer", field_name="sales_notes", allowed=True),
-        WriteRule(agent_id=SALES, entity_type="Deal", field_name=None, allowed=True),
+        WriteRule(agent_id=SALES, entity_type="Deal", field_name="size", allowed=True),
+        WriteRule(agent_id=SALES, entity_type="Deal", field_name="stage", allowed=True),
+        WriteRule(agent_id=SALES, entity_type="Deal", field_name="customer", allowed=True),
         # Sales — visibility
         EntityVisibilityRule(agent_id=SALES, entity_type="Customer", allowed=True),
         EntityVisibilityRule(agent_id=SALES, entity_type="Deal", allowed=True),
@@ -182,15 +184,29 @@ def test_sales_can_write_deal_size() -> None:
         raise AssertionError(f"Sales must be allowed to write deal_size, got: {d}")
 
 
-def test_sales_can_write_any_deal_field_via_wildcard() -> None:
+def test_sales_can_write_each_named_deal_field() -> None:
+    """Wildcards retired (PR 35) — each Deal field needs an explicit WriteRule."""
+    for field_name in ("size", "stage", "customer"):
+        d = evaluate_write(
+            entity_type="Deal",
+            field_name=field_name,
+            agent_id=SALES,
+            ruleset=_initial_ruleset(),
+        )
+        if not d.allowed:
+            raise AssertionError(f"Sales should be allowed to write Deal.{field_name}, got: {d}")
+
+
+def test_sales_blocked_writing_unlisted_deal_field() -> None:
+    """A Deal field with no explicit WriteRule defaults to deny."""
     d = evaluate_write(
         entity_type="Deal",
         field_name="value",
         agent_id=SALES,
         ruleset=_initial_ruleset(),
     )
-    if not d.allowed:
-        raise AssertionError(f"Sales should match the Deal wildcard write rule, got: {d}")
+    if d.allowed:
+        raise AssertionError(f"Deal.value has no rule — must default-deny, got: {d}")
 
 
 def test_unknown_agent_denied_by_default() -> None:

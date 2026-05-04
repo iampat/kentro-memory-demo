@@ -22,13 +22,12 @@ from dataclasses import dataclass
 
 from kentro.types import (
     AutoResolverSpec,
-    ConflictRule,
     FieldStatus,
     LatestWriteResolverSpec,
     PreferAgentResolverSpec,
     RawResolverSpec,
+    ResolverPolicySet,
     ResolverSpec,
-    RuleSet,
     SkillResolverSpec,
 )
 
@@ -66,7 +65,7 @@ def resolve(
     *,
     candidates: list[FieldWriteRow],
     spec: ResolverSpec,
-    ruleset: RuleSet,
+    resolver_policies: ResolverPolicySet,
     entity_type: str,
     field_name: str,
     llm: LLMClient,
@@ -98,9 +97,11 @@ def resolve(
             resolver_used=spec,
         )
 
-    # AutoResolver dispatches to the schema's ConflictRule (or LatestWrite by default).
+    # AutoResolver dispatches to the active ResolverPolicy (or LatestWrite by default).
     if isinstance(spec, AutoResolverSpec):
-        spec = _auto_dispatch(ruleset=ruleset, entity_type=entity_type, field_name=field_name)
+        spec = _auto_dispatch(
+            policies=resolver_policies, entity_type=entity_type, field_name=field_name
+        )
 
     if isinstance(spec, RawResolverSpec):
         return ResolvedFieldValue(
@@ -184,33 +185,28 @@ def resolve(
 
 def _auto_dispatch(
     *,
-    ruleset: RuleSet,
+    policies: ResolverPolicySet,
     entity_type: str,
     field_name: str,
 ) -> ResolverSpec:
-    """Find the active `ConflictRule` for (entity, field); fall back to LatestWrite.
+    """Find the active `ResolverPolicy` for (entity_type, field_name); fall back
+    to LatestWrite if none is configured.
 
-    Defensive: a `ConflictRule(resolver=AutoResolverSpec())` would cause an
-    infinite dispatch loop and ultimately fall through to a TypeError in the
-    outer `resolve()`. Treat that case as "no rule" and use the fallback —
-    AutoResolver inside ConflictRule is meaningless (auto already IS the read
-    path's default). Future v0.1 should reject this at apply time.
+    Defensive: a `ResolverPolicy(resolver=AutoResolverSpec())` would loop, so
+    treat that case as "no policy" and use the LatestWrite fallback — auto
+    already IS the read path's default.
     """
-    for rule in ruleset.rules:
-        if (
-            isinstance(rule, ConflictRule)
-            and rule.entity_type == entity_type
-            and rule.field_name == field_name
-        ):
-            if isinstance(rule.resolver, AutoResolverSpec):
+    for policy in policies.policies:
+        if policy.entity_type == entity_type and policy.field_name == field_name:
+            if isinstance(policy.resolver, AutoResolverSpec):
                 logger.warning(
-                    "ConflictRule for %s.%s wraps AutoResolverSpec — using fallback %s",
+                    "ResolverPolicy for %s.%s wraps AutoResolverSpec — using fallback %s",
                     entity_type,
                     field_name,
                     type(_AUTO_FALLBACK_DEFAULT).__name__,
                 )
                 return _AUTO_FALLBACK_DEFAULT
-            return rule.resolver
+            return policy.resolver
     return _AUTO_FALLBACK_DEFAULT
 
 

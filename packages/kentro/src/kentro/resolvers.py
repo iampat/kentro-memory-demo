@@ -73,10 +73,11 @@ class SkillResolver(Resolver):
 
 
 class AutoResolver(Resolver):
-    """Use whatever resolver the schema's `ConflictRule` specifies for this field.
+    """Use whatever resolver the active `ResolverPolicy` specifies for this field.
 
-    If no `ConflictRule` matches, the server falls back to `LatestWriteResolver`.
-    This is the SDK's default `resolver=` argument on `agent.read(...)`.
+    If no `ResolverPolicy` matches the (entity_type, field_name), the server
+    falls back to `LatestWriteResolver`. This is the SDK's default
+    `resolver=` argument on `agent.read(...)`.
     """
 
     def to_spec(self) -> AutoResolverSpec:

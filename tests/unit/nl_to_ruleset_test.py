@@ -1,25 +1,27 @@
 """Tests for `parse_nl_to_ruleset` — the NL → RuleSet orchestrator.
 
-Uses a fake LLMClient that returns canned `NLIntentList` and `ParsedRule`
+Uses a fake LLMClient that returns canned `NLIntentList` and `ParsedRules`
 results, so we can assert orchestration logic (per-intent validation,
 partial-success notes, schema/agent allowlist) without hitting a real LLM.
+
+PR 35: `ParsedRules.rule_jsons` is a tuple — an intent can fan out into
+multiple rules (e.g. "all fields"). The conflict-resolver intent kind has
+been retired (resolvers live separately as `ResolverPolicy`).
 """
 
 from dataclasses import dataclass, field
 
 from kentro.types import (
-    ConflictRule,
     EntityTypeDef,
     FieldDef,
     FieldReadRule,
-    SkillResolverSpec,
     WriteRule,
 )
 from kentro_server.skills.llm_client import (
     LLMClient,
     NLIntentItem,
     NLIntentList,
-    ParsedRule,
+    ParsedRules,
 )
 from kentro_server.skills.nl_to_ruleset import parse_nl_to_ruleset
 
@@ -39,7 +41,7 @@ class _ScriptedLLM(LLMClient):
     """LLM that returns canned intents + per-intent parsed rules from queues."""
 
     intent_list: NLIntentList = field(default_factory=lambda: NLIntentList(intents=()))
-    rule_queue: list[ParsedRule] = field(default_factory=list)
+    rule_queue: list[ParsedRules] = field(default_factory=list)
 
     def run_skill_resolver(self, *, prompt, candidates, model=None):
         raise NotImplementedError("not exercised here")
@@ -88,13 +90,15 @@ def test_single_valid_field_read_intent_compiles() -> None:
             intents=(NLIntentItem(kind="field_read", description="redact deal_size from sales"),)
         ),
         rule_queue=[
-            ParsedRule(
-                rule_json=FieldReadRule(
-                    agent_id="sales",
-                    entity_type="Customer",
-                    field_name="deal_size",
-                    allowed=False,
-                ).model_dump_json(),
+            ParsedRules(
+                rule_jsons=(
+                    FieldReadRule(
+                        agent_id="sales",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=False,
+                    ).model_dump_json(),
+                ),
                 reason="ok",
             )
         ],
@@ -122,16 +126,18 @@ def test_partial_success_compiles_some_skips_others_with_notes() -> None:
             )
         ),
         rule_queue=[
-            ParsedRule(
-                rule_json=FieldReadRule(
-                    agent_id="sales",
-                    entity_type="Customer",
-                    field_name="deal_size",
-                    allowed=False,
-                ).model_dump_json(),
+            ParsedRules(
+                rule_jsons=(
+                    FieldReadRule(
+                        agent_id="sales",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=False,
+                    ).model_dump_json(),
+                ),
                 reason="ok",
             ),
-            ParsedRule(rule_json=None, reason="ambiguous — clarify which field"),
+            ParsedRules(rule_jsons=(), reason="ambiguous — clarify which field"),
         ],
     )
     out = parse_nl_to_ruleset(
@@ -155,13 +161,15 @@ def test_rule_referencing_unknown_field_is_rejected() -> None:
             intents=(NLIntentItem(kind="field_read", description="redact foo"),)
         ),
         rule_queue=[
-            ParsedRule(
-                rule_json=FieldReadRule(
-                    agent_id="sales",
-                    entity_type="Customer",
-                    field_name="not_a_real_field",
-                    allowed=False,
-                ).model_dump_json(),
+            ParsedRules(
+                rule_jsons=(
+                    FieldReadRule(
+                        agent_id="sales",
+                        entity_type="Customer",
+                        field_name="not_a_real_field",
+                        allowed=False,
+                    ).model_dump_json(),
+                ),
                 reason="ok",
             )
         ],
@@ -184,13 +192,15 @@ def test_rule_referencing_unknown_agent_is_rejected() -> None:
             intents=(NLIntentItem(kind="write_permission", description="block ghost"),)
         ),
         rule_queue=[
-            ParsedRule(
-                rule_json=WriteRule(
-                    agent_id="ghost",
-                    entity_type="Customer",
-                    field_name="deal_size",
-                    allowed=False,
-                ).model_dump_json(),
+            ParsedRules(
+                rule_jsons=(
+                    WriteRule(
+                        agent_id="ghost",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=False,
+                    ).model_dump_json(),
+                ),
                 reason="ok",
             )
         ],
@@ -207,37 +217,42 @@ def test_rule_referencing_unknown_agent_is_rejected() -> None:
         raise AssertionError(f"expected unknown-agent note, got {out.notes!r}")
 
 
-def test_conflict_resolver_intent_compiles() -> None:
+def test_intent_can_fan_out_into_multiple_rules() -> None:
+    """An 'all fields'-style intent emits N rule_jsons; each is validated and
+    accumulates into the final ruleset."""
     llm = _ScriptedLLM(
         intent_list=NLIntentList(
             intents=(
-                NLIntentItem(
-                    kind="conflict_resolver",
-                    description="written outweighs verbal for deal_size",
-                ),
+                NLIntentItem(kind="field_read", description="allow sales to read all Customer"),
             )
         ),
         rule_queue=[
-            ParsedRule(
-                rule_json=ConflictRule(
-                    entity_type="Customer",
-                    field_name="deal_size",
-                    resolver=SkillResolverSpec(prompt="written outweighs verbal"),
-                ).model_dump_json(),
-                reason="picked skill resolver per the policy in the intent",
+            ParsedRules(
+                rule_jsons=(
+                    FieldReadRule(
+                        agent_id="sales",
+                        entity_type="Customer",
+                        field_name="name",
+                        allowed=True,
+                    ).model_dump_json(),
+                    FieldReadRule(
+                        agent_id="sales",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=True,
+                    ).model_dump_json(),
+                ),
+                reason="fanned out across 2 fields",
             )
         ],
     )
     out = parse_nl_to_ruleset(
         llm=llm,
-        text="for deal_size, written outweighs verbal",
+        text="allow sales to read all Customer",
         registered_schemas=[_customer_schema()],
         known_agent_ids=("sales",),
     )
-    if len(out.parsed_ruleset.rules) != 1:
-        raise AssertionError(f"expected 1 rule, got {len(out.parsed_ruleset.rules)}")
-    rule = out.parsed_ruleset.rules[0]
-    if not isinstance(rule, ConflictRule):
-        raise AssertionError(f"expected ConflictRule, got {type(rule)}")
-    if not isinstance(rule.resolver, SkillResolverSpec):
-        raise AssertionError(f"expected SkillResolverSpec, got {type(rule.resolver)}")
+    if len(out.parsed_ruleset.rules) != 2:
+        raise AssertionError(f"expected 2 rules from fan-out, got {len(out.parsed_ruleset.rules)}")
+    if out.notes is not None:
+        raise AssertionError(f"clean fan-out must have no notes, got {out.notes!r}")

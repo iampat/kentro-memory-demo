@@ -102,21 +102,16 @@ class WriteRule(BaseModel):
     type: Literal["write"] = "write"
     agent_id: str
     entity_type: str
-    field_name: str | None = None
+    field_name: str
     allowed: bool
     requires_approval: bool = False
 
 
-class ConflictRule(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    type: Literal["conflict"] = "conflict"
-    entity_type: str
-    field_name: str
-    resolver: ResolverSpec
-
-
+# `ConflictRule` was retired in PR 35: conflict resolution is governed by
+# `ResolverPolicy` (a sibling shape, not a Rule variant). The Rule union now
+# only carries true ACL rules: who can read, who can see, who can write.
 Rule = Annotated[
-    FieldReadRule | EntityVisibilityRule | WriteRule | ConflictRule,
+    FieldReadRule | EntityVisibilityRule | WriteRule,
     Field(discriminator="type"),
 ]
 
@@ -124,6 +119,27 @@ Rule = Annotated[
 class RuleSet(BaseModel):
     model_config = ConfigDict(frozen=True)
     rules: tuple[Rule, ...] = ()
+    version: int = 0
+
+
+# === Resolvers (separate from RuleSet — different shape, different question) ===
+#
+# A `ResolverPolicy` answers "when two writes for `entity_type.field_name`
+# collide, which one wins?" Stored independently from the ACL ruleset so
+# the two concerns can be reasoned about separately. Edited from the
+# LineageDrawer's resolver chip in the UI.
+
+
+class ResolverPolicy(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    entity_type: str
+    field_name: str
+    resolver: ResolverSpec
+
+
+class ResolverPolicySet(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    policies: tuple[ResolverPolicy, ...] = ()
     version: int = 0
 
 
@@ -237,7 +253,7 @@ class NLIntent(BaseModel):
     """
 
     model_config = ConfigDict(frozen=True)
-    kind: Literal["field_read", "entity_visibility", "write_permission", "conflict_resolver"]
+    kind: Literal["field_read", "entity_visibility", "write_permission"]
     description: str
 
 
@@ -493,7 +509,6 @@ __all__ = [
     "Agent",
     "AutoResolverSpec",
     "Conflict",
-    "ConflictRule",
     "DocumentContentResponse",
     "DocumentListResponse",
     "DocumentSummary",
@@ -521,6 +536,8 @@ __all__ = [
     "NLResponse",
     "PreferAgentResolverSpec",
     "ReevaluationReport",
+    "ResolverPolicy",
+    "ResolverPolicySet",
     "ResolverSpec",
     "RawResolverSpec",
     "Rule",

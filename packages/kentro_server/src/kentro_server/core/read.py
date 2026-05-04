@@ -19,6 +19,7 @@ from kentro.types import (
     FieldValue,
     FieldValueCandidate,
     LineageRecord,
+    ResolverPolicySet,
     ResolverSpec,
     RuleSet,
 )
@@ -51,6 +52,7 @@ def read_entity(
     *,
     schema: SchemaRegistry,
     ruleset: RuleSet,
+    resolver_policies: ResolverPolicySet,
     agent_id: str,
     entity_type: str,
     entity_key: str,
@@ -163,7 +165,7 @@ def read_entity(
         resolved = resolve(
             candidates=candidates,
             spec=resolver,
-            ruleset=ruleset,
+            resolver_policies=resolver_policies,
             entity_type=entity_type,
             field_name=field_name,
             llm=llm,

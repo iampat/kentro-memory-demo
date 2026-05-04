@@ -33,7 +33,6 @@ import logging
 from typing import Literal, cast
 
 from kentro.types import (
-    ConflictRule,
     EntityVisibilityRule,
     FieldReadRule,
     NLIntent,
@@ -50,10 +49,10 @@ logger = logging.getLogger(__name__)
 
 
 _VALID_INTENT_KINDS: frozenset[str] = frozenset(
-    {"field_read", "entity_visibility", "write_permission", "conflict_resolver"}
+    {"field_read", "entity_visibility", "write_permission"}
 )
 _RULE_ADAPTER: TypeAdapter[Rule] = TypeAdapter(Rule)
-_IntentKind = Literal["field_read", "entity_visibility", "write_permission", "conflict_resolver"]
+_IntentKind = Literal["field_read", "entity_visibility", "write_permission"]
 
 DEFAULT_MAX_INTENTS = 20
 
@@ -97,13 +96,9 @@ def parse_nl_to_ruleset(
     schema_by_name = {td.name: td for td in registered_schemas}
 
     for raw in raw_intents:
-        # Coerce the LLM's free-form `kind` into our literal set; reject if it
-        # doesn't match (the LLM is told the four allowed kinds in the skill).
         if raw.kind not in _VALID_INTENT_KINDS:
             skip_notes.append(f"intent {raw.description!r}: unknown kind {raw.kind!r} (skipped)")
             continue
-        # Membership check above guarantees raw.kind is one of the four literals;
-        # cast() is the lightest way to tell ty that without re-validating.
         intent = NLIntent(kind=cast(_IntentKind, raw.kind), description=raw.description)
         intents.append(intent)
 
@@ -114,36 +109,41 @@ def parse_nl_to_ruleset(
             known_agent_ids=known_agent_ids,
             model=fast_model,
         )
-        if parsed.rule_json is None:
+        if not parsed.rule_jsons:
             skip_notes.append(f"intent {raw.description!r}: {parsed.reason}")
             continue
 
-        try:
-            rule = _RULE_ADAPTER.validate_json(parsed.rule_json)
-        except ValidationError as exc:
-            logger.info("parse_nl_to_ruleset: rule JSON failed schema validation: %s", exc)
-            # Surface the actual validation problem so callers can see WHY
-            # it failed (e.g. "field required", "wrong discriminator value")
-            # instead of a count. Each error is "<location>: <msg>"; the
-            # location is a tuple path through the JSON.
-            err_summaries = []
-            for e in exc.errors():
-                loc = ".".join(str(p) for p in e.get("loc", ()))
-                msg = e.get("msg", "")
-                err_summaries.append(f"{loc}: {msg}" if loc else msg)
-            details = "; ".join(err_summaries)
-            skip_notes.append(
-                f"intent {raw.description!r}: LLM-produced rule did not match the "
-                f"Rule schema — {details}. Raw JSON: {parsed.rule_json}"
+        # An intent can fan out into N rules (e.g. "all fields" → one rule
+        # per field). Each emitted JSON is validated independently; failures
+        # are noted per-JSON but don't drop the rest of the intent.
+        for idx, rule_json in enumerate(parsed.rule_jsons):
+            label = (
+                raw.description
+                if len(parsed.rule_jsons) == 1
+                else f"{raw.description} [#{idx + 1}/{len(parsed.rule_jsons)}]"
             )
-            continue
+            try:
+                rule = _RULE_ADAPTER.validate_json(rule_json)
+            except ValidationError as exc:
+                logger.info("parse_nl_to_ruleset: rule JSON failed schema validation: %s", exc)
+                err_summaries = []
+                for e in exc.errors():
+                    loc = ".".join(str(p) for p in e.get("loc", ()))
+                    msg = e.get("msg", "")
+                    err_summaries.append(f"{loc}: {msg}" if loc else msg)
+                details = "; ".join(err_summaries)
+                skip_notes.append(
+                    f"intent {label!r}: LLM-produced rule did not match the "
+                    f"Rule schema — {details}. Raw JSON: {rule_json}"
+                )
+                continue
 
-        validation_error = _validate_rule_against_world(rule, schema_by_name, known_agent_ids)
-        if validation_error is not None:
-            skip_notes.append(f"intent {raw.description!r}: {validation_error}")
-            continue
+            validation_error = _validate_rule_against_world(rule, schema_by_name, known_agent_ids)
+            if validation_error is not None:
+                skip_notes.append(f"intent {label!r}: {validation_error}")
+                continue
 
-        valid_rules.append(rule)
+            valid_rules.append(rule)
 
     notes = "\n".join(skip_notes) if skip_notes else None
     summary = f"parsed {len(valid_rules)} rule(s) from {len(intent_list.intents)} intent(s)" + (
@@ -204,16 +204,6 @@ def _validate_rule_against_world(
                 return f"unknown entity_type {entity_type!r}"
             if agent_id not in known_agents:
                 return f"unknown agent_id {agent_id!r} (known: {sorted(known_agents)})"
-
-        case ConflictRule(entity_type=entity_type, field_name=conflict_field_name):
-            if entity_type not in schema_by_name:
-                return f"unknown entity_type {entity_type!r}"
-            field_names = {f.name for f in schema_by_name[entity_type].fields}
-            if conflict_field_name not in field_names:
-                return (
-                    f"unknown field {entity_type}.{conflict_field_name!r} "
-                    f"(declared: {sorted(field_names)})"
-                )
 
     return None
 

@@ -2586,3 +2586,106 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   border-top: 1px dashed var(--line);
   padding-top: 6px;
 }
+
+/* Resolver chip becomes clickable when an editor target is in scope. */
+.flow-h2-resolver.is-clickable {
+  cursor: pointer;
+  transition: transform 120ms, box-shadow 120ms;
+}
+.flow-h2-resolver.is-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px oklch(0.16 0.02 260 / 0.18);
+}
+
+/* Inline resolver editor — appears under the RESOLVER chip when clicked. */
+.resolver-editor {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.resolver-editor-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.resolver-editor-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.resolver-editor-close {
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.resolver-editor-close:hover { color: var(--ink); }
+.resolver-editor-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.resolver-editor-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.resolver-editor-row select,
+.resolver-editor-row input,
+.resolver-editor-row textarea {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: oklch(1 0 0);
+  color: var(--ink);
+  width: 100%;
+  resize: vertical;
+}
+.resolver-editor-row textarea { min-height: 56px; }
+.resolver-editor-error {
+  color: var(--bad);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.resolver-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.resolver-editor-actions button {
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.resolver-editor-actions .primary {
+  background: var(--accent);
+  color: oklch(0.99 0 0);
+  border: 1px solid var(--accent);
+}
+.resolver-editor-actions .primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.resolver-editor-actions .secondary {
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+}

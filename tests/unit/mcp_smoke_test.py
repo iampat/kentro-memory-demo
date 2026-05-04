@@ -222,12 +222,19 @@ async def test_kentro_remember_atomic_no_partial_writes_on_field_denial(
         store,
         rules=(
             EntityVisibilityRule(agent_id=agent_id, entity_type="Note", allowed=True),
-            WriteRule(agent_id=agent_id, entity_type="Note", allowed=True),
+            WriteRule(agent_id=agent_id, entity_type="Note", field_name="subject", allowed=True),
+            WriteRule(agent_id=agent_id, entity_type="Note", field_name="predicate", allowed=True),
             WriteRule(
                 agent_id=agent_id,
                 entity_type="Note",
                 field_name="object_json",
                 allowed=False,
+            ),
+            WriteRule(
+                agent_id=agent_id, entity_type="Note", field_name="confidence", allowed=True
+            ),
+            WriteRule(
+                agent_id=agent_id, entity_type="Note", field_name="source_label", allowed=True
             ),
             FieldReadRule(
                 agent_id=agent_id, entity_type="Note", field_name="subject", allowed=True
