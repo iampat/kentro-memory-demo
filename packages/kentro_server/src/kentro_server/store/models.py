@@ -152,6 +152,42 @@ class SchemaTypeRow(SQLModel, table=True):
     registered_at: datetime = Field(default_factory=_now_utc)
 
 
+class SkillActionExecutionRow(SQLModel, table=True):
+    """One executed SkillResolver action — exists to dedupe replays across reads.
+
+    Codex 2026-05-03 high finding #1: `read_entity()` runs `resolved.actions`
+    immediately after resolution. Without persistence, any retried request,
+    client refresh, or simple repeat read could re-execute the same
+    `WriteEntityAction` / `NotifyAction` — making reads state-changing and
+    re-entrant.
+
+    Dedupe model:
+      - `scope_key` is a stable identifier for the resolver decision the
+        action came from. When a conflict row exists, scope_key is
+        `"conflict:<uuid>"`; otherwise (single-candidate corroboration),
+        scope_key is `"write:<uuid>"` of the winning field write.
+      - `action_fingerprint` is a SHA-256 hex digest over the action's
+        normalized payload (type + entity refs + field + value, or
+        type + channel + message). Stable across retries.
+      - `UNIQUE(scope_key, action_fingerprint)` blocks re-execution at the
+        DB level. The read path checks first (cheap) and then catches
+        `IntegrityError` as the race-condition safety net.
+    """
+
+    __tablename__ = "skill_action_execution"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_key", "action_fingerprint", name="uq_skill_action_scope_fingerprint"
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    scope_key: str = Field(index=True)
+    action_fingerprint: str = Field(index=True)
+    executed_at: datetime = Field(default_factory=_now_utc)
+    executed_by_agent_id: str = Field(foreign_key="agent.id")
+
+
 class ExtractionStepRow(SQLModel, table=True):
     """Telemetry for a single LLM call made during ingestion."""
 
@@ -178,4 +214,5 @@ __all__ = [
     "RuleRow",
     "RuleVersionRow",
     "SchemaTypeRow",
+    "SkillActionExecutionRow",
 ]

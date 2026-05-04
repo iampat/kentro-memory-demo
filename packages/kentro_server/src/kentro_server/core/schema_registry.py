@@ -129,8 +129,74 @@ class SchemaRegistry:
         )
 
     def register_many(self, type_defs: list[EntityTypeDef]) -> None:
+        """Atomically register a batch of entity types.
+
+        Codex 2026-05-03 high finding: the previous implementation looped
+        `register()` per type, each committing immediately. If the third
+        type's evolution check failed, the first two were already persisted
+        — leaving the tenant in a partially-mutated state.
+
+        New shape:
+          1. Load every existing definition once (single query).
+          2. Pre-validate every (existing | None, new) pair as a pure check.
+             A failure raises `SchemaEvolutionError` BEFORE any write.
+          3. If all pass, issue every insert/update inside ONE transaction
+             via `session.begin()`. A DB-level error rolls back the whole
+             batch.
+        """
+        if not type_defs:
+            return
+
+        with self._store.session() as session:
+            existing_rows = list(session.exec(select(SchemaTypeRow)).all())
+        existing_by_name: dict[str, tuple[SchemaTypeRow, EntityTypeDef]] = {
+            row.name: (row, EntityTypeDef.model_validate_json(row.definition_json))
+            for row in existing_rows
+        }
+
+        # Phase 1: pure pre-validation. Raises before touching the DB.
+        idempotent: set[str] = set()
         for td in type_defs:
-            self.register(td)
+            existing_pair = existing_by_name.get(td.name)
+            if existing_pair is None:
+                continue  # net-new type; nothing to validate
+            _, existing_def = existing_pair
+            if existing_def == td:
+                idempotent.add(td.name)
+                continue
+            # Raises SchemaEvolutionError on disallowed transitions.
+            _validate_evolution(existing_def, td)
+
+        # Phase 2: single-transaction apply. Any DB error rolls back the lot.
+        with self._store.session() as session, session.begin():
+            for td in type_defs:
+                if td.name in idempotent:
+                    continue
+                payload = td.model_dump_json()
+                existing_pair = existing_by_name.get(td.name)
+                if existing_pair is None:
+                    session.add(SchemaTypeRow(name=td.name, definition_json=payload))
+                else:
+                    # Re-fetch under the active session (the row from the read
+                    # session above is detached). Use `session.get` for the
+                    # primary-key lookup.
+                    row = session.get(SchemaTypeRow, td.name)
+                    if row is None:
+                        # Lost the read-after-write race — treat as net-new.
+                        session.add(SchemaTypeRow(name=td.name, definition_json=payload))
+                    else:
+                        row.definition_json = payload
+                        session.add(row)
+
+        self._cache = None
+        applied = [td.name for td in type_defs if td.name not in idempotent]
+        logger.info(
+            "tenant=%s schema BATCH applied=%d idempotent=%d types=%r",
+            self._store.tenant_id,
+            len(applied),
+            len(idempotent),
+            applied,
+        )
 
     def list_all(self) -> list[EntityTypeDef]:
         """All registered types. Auto-seeds the built-in `Note` on first call."""

@@ -485,14 +485,21 @@ def test_skill_action_notify_publishes_to_event_bus(
 
     bus.publish = capture
     try:
-        # Trigger a read with the SkillResolver
+        # Trigger TWO reads with the SkillResolver — Codex 2026-05-03 finding #1
+        # ("dedupe SkillResolver actions") guarantees the second read reuses the
+        # SkillActionExecutionRow from the first and skips re-publishing.
         r = client.get("/entities/Customer/Acme", headers=_admin())
         if r.status_code != 200:
-            raise AssertionError(f"read failed: {r.status_code}: {r.text}")
-        # Bus should have one notify event
+            raise AssertionError(f"first read failed: {r.status_code}: {r.text}")
+        r = client.get("/entities/Customer/Acme", headers=_admin())
+        if r.status_code != 200:
+            raise AssertionError(f"second read failed: {r.status_code}: {r.text}")
+        # Bus should have EXACTLY one notify event despite two reads.
         notifies = [e for e in received if e.kind == "notify"]
         if len(notifies) != 1:
-            raise AssertionError(f"expected 1 notify on the bus, got {received!r}")
+            raise AssertionError(
+                f"expected exactly 1 notify on the bus across two reads, got {received!r}"
+            )
         if notifies[0].payload.get("channel") != "#deals-review":
             raise AssertionError(f"channel mismatch: {notifies[0].payload!r}")
         if notifies[0].tenant_id != "local":

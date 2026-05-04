@@ -219,3 +219,52 @@ def test_get_returns_none_for_unknown(store: TenantStore) -> None:
     reg = SchemaRegistry(store)
     if reg.get("NotARealType") is not None:
         raise AssertionError("get should return None for an unregistered type")
+
+
+def test_register_many_is_atomic_on_evolution_failure(store: TenantStore) -> None:
+    """Codex 2026-05-03 finding #3: a mid-batch evolution error must roll back ALL writes.
+
+    Setup: pre-register `Existing` with field `age: int`. Then call
+    `register_many` with three types — two new + a re-register of
+    `Existing` that changes `age` to `str` (a denied evolution). The pre-
+    validation phase must raise BEFORE any insert lands.
+    """
+    reg = SchemaRegistry(store)
+    reg.register(EntityTypeDef(name="Existing", fields=(FieldDef(name="age", type_str="int"),)))
+
+    new_a = EntityTypeDef(name="NewA", fields=(FieldDef(name="x", type_str="str"),))
+    new_b = EntityTypeDef(name="NewB", fields=(FieldDef(name="y", type_str="int"),))
+    bad_existing = EntityTypeDef(name="Existing", fields=(FieldDef(name="age", type_str="str"),))
+
+    with pytest.raises(SchemaEvolutionError, match="changing type"):
+        reg.register_many([new_a, new_b, bad_existing])
+
+    # After the failed batch, the registry's persisted state must be unchanged.
+    fresh = SchemaRegistry(store)
+    names = set(fresh.names())
+    if "NewA" in names or "NewB" in names:
+        raise AssertionError(
+            f"partial commit detected — NewA/NewB should NOT be persisted, got {names}"
+        )
+    existing = fresh.get("Existing")
+    if existing is None:
+        raise AssertionError("Existing was lost from the registry")
+    age_field = next((f for f in existing.fields if f.name == "age"), None)
+    if age_field is None or age_field.type_str != "int":
+        raise AssertionError(f"Existing.age must remain `int`, got {age_field!r}")
+
+
+def test_register_many_writes_all_when_every_type_validates(store: TenantStore) -> None:
+    """Happy-path: a clean batch (no failures) commits every type."""
+    reg = SchemaRegistry(store)
+    types = [
+        EntityTypeDef(name="A", fields=(FieldDef(name="x", type_str="str"),)),
+        EntityTypeDef(name="B", fields=(FieldDef(name="y", type_str="int"),)),
+        EntityTypeDef(name="C", fields=(FieldDef(name="z", type_str="float"),)),
+    ]
+    reg.register_many(types)
+
+    fresh = SchemaRegistry(store)
+    names = set(fresh.names())
+    if not {"A", "B", "C"}.issubset(names):
+        raise AssertionError(f"clean batch should persist every type, got {names}")
