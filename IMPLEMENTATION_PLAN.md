@@ -373,7 +373,11 @@ Bundles the deferred codex 3-finding fix (since Stage A immediately starts depen
 
 **Verification:** Scene 4 demo beat — admin applies "written outweighs verbal AND create Ticket on conflicts >$200K AND notify sales-lead" rule; ingest email triggering conflict resolution; in the UI, see (a) the conflict resolves, (b) a `Ticket` entity appears in the entity list, (c) `<TicketBadge>` renders next to deal_size, (d) `<EscalationToast>` fades in saying "sales-lead notified". Memory note `pending_workflow_aware_skills.md` retired.
 
-#### PR 10-6 — Step 11 (synthetic corpus + scenario test)
+#### PR 11 — SkillResolver prompt + workflow-action end-to-end test — **DONE**
+
+**Built:** `skills/skill_resolver/SKILL.md` rewritten to teach the LLM the two-job protocol (pick a winner; optionally emit `WriteEntityAction` + `NotifyAction`). Two few-shot examples in the prompt — one with side effects (written-vs-verbal + AuditLog log + Slack notify), one without (latest-write only). Cache-key fingerprint includes the rendered system prompt, so this edit invalidates every cached SkillResolver response automatically. New unit test `test_skill_action_notify_publishes_to_event_bus` proves the full chain: SkillResolver decision → `ResolvedFieldValue.actions` → `core/read.py::_execute_actions` → `EventBus.publish` → SSE-ready event. Synthetic corpus audited — 8 markdown files already exercise all 4 entity types + verbal-vs-written + conflicting deal_size; no regeneration needed. End-to-end smoke test (gated on `ANTHROPIC_API_KEY`) runs the full pipeline against the corpus.
+
+#### PR 10-6 — Step 11 (synthetic corpus + scenario test) — original scope outline (kept for reference)
 
 - `scripts/generate_corpus.py` already-extant (8 docs in `examples/synthetic_corpus/`); audit + regenerate any docs that don't match the current 4-entity schema; idempotent re-run cached against the LLM cache.
 - `tests/integration/scenario_test.py`: walks all 9 demo beats end-to-end, asserts on observable state at each beat (ACL boundaries, conflict creation, conflict resolution, source removal, fallback). Uses real LLM (gated on `ANTHROPIC_API_KEY`, `pytest.skip` otherwise).

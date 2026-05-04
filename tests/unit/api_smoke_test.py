@@ -400,6 +400,107 @@ def test_demo_keys_returns_all_agents_when_opted_in(client: TestClient) -> None:
         raise AssertionError(f"non-admin should be 403, got {r.status_code}")
 
 
+def test_skill_action_notify_publishes_to_event_bus(
+    client: TestClient,
+    fake_llm: FakeLLM,
+) -> None:
+    """PR 10-5/11 end-to-end: a SkillResolver decision carrying a NotifyAction
+    must publish onto the EventBus when a /entities/{type}/{key}/read fires it.
+
+    Setup: register Customer, write two conflicting deal_size values, apply a
+    ConflictRule(SkillResolver), script the FakeLLM to return a winner +
+    NotifyAction. Subscribe to the EventBus directly (in-process), trigger a
+    POST /entities/.../read with the SkillResolverSpec, assert the event
+    landed.
+    """
+    from kentro.types import ConflictRule  # noqa: PLC0415 — test-local
+    from kentro_server.main import app  # noqa: PLC0415
+    from kentro_server.skills.llm_client import (  # noqa: PLC0415
+        NotifyAction,
+        SkillResolverDecision,
+    )
+
+    # Setup: register Customer
+    client.post(
+        "/schema/register",
+        headers=_admin(),
+        json={
+            "type_defs": [
+                EntityTypeDef(
+                    name="Customer",
+                    fields=(FieldDef(name="deal_size", type_str="float"),),
+                ).model_dump(mode="json")
+            ]
+        },
+    )
+    _grant_access_for_ingestion(client)
+    # Apply conflict rule that uses SkillResolver
+    from kentro.types import SkillResolverSpec  # noqa: PLC0415
+
+    client.post(
+        "/rules/apply",
+        headers=_admin(),
+        json={
+            "ruleset": RuleSet(
+                rules=(
+                    EntityVisibilityRule(
+                        agent_id="ingestion_agent", entity_type="Customer", allowed=True
+                    ),
+                    WriteRule(agent_id="ingestion_agent", entity_type="Customer", allowed=True),
+                    FieldReadRule(
+                        agent_id="ingestion_agent",
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        allowed=True,
+                    ),
+                    ConflictRule(
+                        entity_type="Customer",
+                        field_name="deal_size",
+                        resolver=SkillResolverSpec(prompt="written outweighs verbal"),
+                    ),
+                )
+            ).model_dump(mode="json"),
+        },
+    )
+    # Two conflicting writes
+    for v in ("250000", "300000"):
+        client.post("/entities/Customer/Acme/deal_size", headers=_admin(), json={"value_json": v})
+
+    # Script the FakeLLM to return a winner + NotifyAction
+    fake_llm.skill_decision = SkillResolverDecision(
+        chosen_value_json="300000",
+        reason="written outweighs verbal",
+        actions=(NotifyAction(channel="#deals-review", message="Acme resolved at $300K"),),
+    )
+
+    # Subscribe to the EventBus to capture the publish
+    bus = app.state.event_bus
+    received: list = []
+
+    original_publish = bus.publish
+
+    def capture(event):
+        received.append(event)
+        return original_publish(event)
+
+    bus.publish = capture
+    try:
+        # Trigger a read with the SkillResolver
+        r = client.get("/entities/Customer/Acme", headers=_admin())
+        if r.status_code != 200:
+            raise AssertionError(f"read failed: {r.status_code}: {r.text}")
+        # Bus should have one notify event
+        notifies = [e for e in received if e.kind == "notify"]
+        if len(notifies) != 1:
+            raise AssertionError(f"expected 1 notify on the bus, got {received!r}")
+        if notifies[0].payload.get("channel") != "#deals-review":
+            raise AssertionError(f"channel mismatch: {notifies[0].payload!r}")
+        if notifies[0].tenant_id != "local":
+            raise AssertionError(f"tenant_id mismatch: {notifies[0].tenant_id!r}")
+    finally:
+        bus.publish = original_publish
+
+
 def test_demo_keys_404_without_opt_in(
     isolated_state: None,
     fake_llm: FakeLLM,
