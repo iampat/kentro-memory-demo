@@ -39,10 +39,12 @@ K.docMeta = function (doc) {
 };
 
 // Format a field value from `GET /entities/...` as a display string. Hidden
-// fields show the redaction marker; unresolved fields show candidate values
-// joined by `⇄`; known fields show the raw string or JSON-encoded value.
-// Shared between AgentPanel (top-row live read) and EntityOverlay (the
-// global+per-agent comparison view).
+// fields show the redaction marker; unresolved fields show a "⚠ conflict"
+// label (NOT the candidate values joined together — that reads too much
+// like a real value; click through to the lineage drawer to inspect the
+// actual candidates); known fields show the raw string or JSON-encoded
+// value. Shared between AgentPanel (top-row live read) and EntityOverlay
+// (the global+per-agent comparison view).
 K.fmtFieldValue = function (fval) {
   if (!fval) return "—";
   switch (fval.status) {
@@ -51,8 +53,9 @@ K.fmtFieldValue = function (fval) {
     case "unknown":
       return "—";
     case "unresolved": {
-      const cands = (fval.candidates || []).map((c) => JSON.stringify(c.value));
-      return cands.join(" ⇄ ") || "(unresolved)";
+      const n = (fval.candidates || []).length;
+      if (n === 0) return "⚠ conflict";
+      return `⚠ conflict — ${n} candidate${n === 1 ? "" : "s"} disagree`;
     }
     case "known":
       // String values that look like markdown filenames (e.g. the Note

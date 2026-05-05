@@ -43,7 +43,9 @@ class _ScriptedLLM(LLMClient):
     intent_list: NLIntentList = field(default_factory=lambda: NLIntentList(intents=()))
     rule_queue: list[ParsedRules] = field(default_factory=list)
 
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
+    def run_skill_resolver(
+        self, *, prompt, candidates, model=None, mode="pick", source_metadata=None
+    ):
         raise NotImplementedError("not exercised here")
 
     def extract_entities(

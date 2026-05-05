@@ -18,7 +18,9 @@ SkillResolverDecision in skills/llm_client.py for the schema. Lands the
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
+from uuid import UUID
 
 from kentro.types import (
     AutoResolverSpec,
@@ -30,7 +32,10 @@ from kentro.types import (
     SkillResolverSpec,
 )
 
-from kentro_server.skills.llm_client import LLMClient
+from kentro_server.skills.llm_client import (
+    LLMClient,
+    SkillResolverSourceMeta,
+)
 from kentro_server.store.models import FieldWriteRow
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,12 @@ class ResolvedFieldValue:
     resolver_used: ResolverSpec
     actions: tuple = ()  # tuple[SkillAction, ...] — kept untyped here to avoid
     # importing SkillAction from skills/llm_client.py (would be a cycle).
+    # Set when a SkillResolver in `synthesize` mode produced a fresh value
+    # (no winner row in `candidates`). The read path renders this as the
+    # field value with KNOWN status; lineage attributes ALL candidates as
+    # contributing sources rather than highlighting one winner.
+    synthesized_value_json: str | None = None
+    synthesized_confidence: float | None = None
 
 
 def resolve(
@@ -67,6 +78,7 @@ def resolve(
     entity_type: str,
     field_name: str,
     llm: LLMClient,
+    source_metadata: Mapping[UUID, SkillResolverSourceMeta] | None = None,
 ) -> ResolvedFieldValue:
     """Pick a winner over `candidates` per `spec`. Empty candidates is the caller's bug."""
     if not candidates:
@@ -121,11 +133,18 @@ def resolve(
         )
 
     if isinstance(spec, SkillResolverSpec):
+        mode = "synthesize" if spec.synthesize else "pick"
         decision = llm.run_skill_resolver(
             prompt=spec.prompt,
             candidates=candidates,
             model=spec.model,
+            mode=mode,
+            source_metadata=source_metadata,
         )
+        # Refusal (in either mode) → UNRESOLVED with all candidates surfaced.
+        # We never silently fall back to concatenation or a default; the
+        # caller sees both the reason and every candidate so the UI can
+        # render a true conflict view.
         if decision.chosen_value_json is None:
             return ResolvedFieldValue(
                 status=FieldStatus.UNRESOLVED,
@@ -134,6 +153,19 @@ def resolve(
                 reason=decision.reason,
                 resolver_used=spec,
             )
+        if spec.synthesize:
+            # Synthesized winner: no row in `candidates` matches by design.
+            # Lineage attributes ALL candidates as contributors.
+            return ResolvedFieldValue(
+                status=FieldStatus.KNOWN,
+                winner=None,
+                candidates=tuple(candidates),
+                reason=decision.reason,
+                resolver_used=spec,
+                actions=decision.actions,
+                synthesized_value_json=decision.chosen_value_json,
+            )
+        # Pick mode: must match a real candidate byte-for-byte.
         winner = next(
             (c for c in candidates if c.value_json == decision.chosen_value_json),
             None,
@@ -144,7 +176,7 @@ def resolve(
                 winner=None,
                 candidates=tuple(candidates),
                 reason=(
-                    f"skill returned a value not present among candidates: "
+                    f"skill (pick mode) returned a value not present among candidates: "
                     f"{decision.chosen_value_json!r}"
                 ),
                 resolver_used=spec,

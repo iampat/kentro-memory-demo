@@ -73,7 +73,9 @@ class FakeLLM(LLMClient):
     intents_calls: int = 0
     rule_calls: int = 0
 
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
+    def run_skill_resolver(
+        self, *, prompt, candidates, model=None, mode="pick", source_metadata=None
+    ):
         self.skill_calls += 1
         return self.skill_decision
 

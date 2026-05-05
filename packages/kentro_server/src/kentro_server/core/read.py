@@ -34,11 +34,13 @@ from kentro_server.skills.llm_client import (
     LLMClient,
     NotifyAction,
     SkillAction,
+    SkillResolverSourceMeta,
     WriteEntityAction,
 )
 from kentro_server.store import TenantStore
 from kentro_server.store.models import (
     ConflictRow,
+    DocumentRow,
     EntityRow,
     FieldWriteRow,
     SkillActionExecutionRow,
@@ -125,6 +127,7 @@ def read_entity(
             )
         ).first()
         live_writes_by_field: dict[str, list[FieldWriteRow]] = {}
+        source_metadata: dict = {}
         if entity_row is not None:
             all_writes = list(
                 session.exec(
@@ -138,6 +141,21 @@ def read_entity(
             )
             for w in all_writes:
                 live_writes_by_field.setdefault(w.field_name, []).append(w)
+            # Pre-load source_class + label for every distinct source document
+            # referenced by the candidates. Used by SkillResolver prompts so
+            # policies like "written outweighs verbal" can pivot on modality.
+            # One query regardless of field count; harmless when no skill
+            # resolver runs (we just don't read the dict).
+            doc_ids = {w.source_document_id for w in all_writes if w.source_document_id}
+            if doc_ids:
+                docs = session.exec(
+                    select(DocumentRow).where(col(DocumentRow.id).in_(doc_ids))
+                ).all()
+                for d in docs:
+                    source_metadata[d.id] = SkillResolverSourceMeta(
+                        source_class=d.source_class,
+                        source_label=d.label,
+                    )
 
     fields: dict[str, FieldValue] = {}
     for field_def in type_def.fields:
@@ -169,6 +187,7 @@ def read_entity(
             entity_type=entity_type,
             field_name=field_name,
             llm=llm,
+            source_metadata=source_metadata,
         )
         fields[field_name] = _to_field_value(resolved)
 
@@ -416,7 +435,42 @@ def _to_field_value(resolved) -> FieldValue:
     deduplicated by source_document_id so a doc that wrote the same field
     twice doesn't double-count) so the UI can show all sources that backed
     the resolved value, not just the latest one.
+
+    Synthesised winners (SkillResolver in `synthesize` mode) have no row in
+    `candidates` — the value was produced by the LLM. Lineage attributes
+    every candidate as a contributing source; there is no anchor row.
     """
+    # Synthesised winner — winner is None but synthesized_value_json is set.
+    if (
+        resolved.status == FieldStatus.KNOWN
+        and resolved.winner is None
+        and resolved.synthesized_value_json is not None
+    ):
+        chronological = sorted(resolved.candidates, key=lambda c: c.written_at)
+        seen_sources: set = set()
+        lineage_list: list[LineageRecord] = []
+        for c in chronological:
+            if c.source_document_id is not None:
+                if c.source_document_id in seen_sources:
+                    continue
+                seen_sources.add(c.source_document_id)
+            lineage_list.append(
+                LineageRecord(
+                    source_document_id=c.source_document_id,
+                    written_at=c.written_at,
+                    written_by_agent_id=c.written_by_agent_id,
+                    rule_version=c.rule_version_at_write,
+                    extraction_step_id=c.extraction_step_id,
+                    value=_decode(c.value_json),
+                )
+            )
+        return FieldValue(
+            status=FieldStatus.KNOWN,
+            value=_decode(resolved.synthesized_value_json),
+            confidence=resolved.synthesized_confidence,
+            lineage=tuple(lineage_list),
+        )
+
     if resolved.status == FieldStatus.KNOWN and resolved.winner is not None:
         winner = resolved.winner
         # All candidates corroborate the resolved value (the resolver's

@@ -1609,6 +1609,16 @@ function LineageFlow({
   const distinctSourceValues = new Set(cands.map((c) => JSON.stringify(c.value))).size;
   const isCorroboration = isKnown && distinctSourceValues === 1 && cands.length > 1;
   const isLatestPick = isKnown && distinctSourceValues > 1;
+  // Synthesised winner — KNOWN status, multiple distinct source values, AND
+  // none of the candidate values matches the resolved value. Means a Skill
+  // resolver in `synthesize` mode produced a fresh value (e.g. a summary).
+  // No single candidate is "the winner"; every candidate contributed.
+  const resolvedJson = isKnown ? JSON.stringify(fval.value) : null;
+  const isSynthesized =
+    isKnown &&
+    cands.length > 1 &&
+    distinctSourceValues > 1 &&
+    !cands.some((c) => JSON.stringify(c.value) === resolvedJson);
   // Prefer the actual configured resolver type when one exists — the chip
   // should reflect what's wired up, not a value-derived guess. Falls back to
   // the heuristic labels for status (corroboration/direct/conflict) when no
@@ -1622,21 +1632,27 @@ function LineageFlow({
         : null;
   const resolverName = !isKnown
     ? "conflict"
-    : isCorroboration
-      ? resolverTypeLabel || "corroboration"
-      : isLatestPick
-        ? resolverTypeLabel || "latest write resolver"
-        : resolverTypeLabel || "direct";
-  const resolverDetail = isKnown
-    ? `${cands.length} → ${distinctSourceValues} value${distinctSourceValues === 1 ? "" : "s"}`
-    : `${cands.length} → ${distinctSourceValues} values`;
+    : isSynthesized
+      ? "synthesize ✨ skill resolver"
+      : isCorroboration
+        ? resolverTypeLabel || "corroboration"
+        : isLatestPick
+          ? resolverTypeLabel || "latest write resolver"
+          : resolverTypeLabel || "direct";
+  const resolverDetail = isSynthesized
+    ? `${cands.length} → 1 synthesised value`
+    : isKnown
+      ? `${cands.length} → ${distinctSourceValues} value${distinctSourceValues === 1 ? "" : "s"}`
+      : `${cands.length} → ${distinctSourceValues} values`;
 
   // Decide which candidate card is the WINNER so we can highlight its
-  // connector. KNOWN: the winner's value matches the resolved fval.value;
-  // when corroborating (all same), every row is a winner. UNRESOLVED: no
-  // winner; every connector is dim.
-  const winnerJson = isKnown ? JSON.stringify(fval.value) : null;
-  const candIsWinner = (c) => winnerJson !== null && JSON.stringify(c.value) === winnerJson;
+  // connector. KNOWN+pick: the winner's value matches the resolved fval.value;
+  // when corroborating (all same), every row is a winner. KNOWN+synthesise:
+  // every candidate contributed, treat all as "winners" so all curves show
+  // at full opacity. UNRESOLVED: no winner; every connector is dim.
+  const candIsWinner = isSynthesized
+    ? () => true
+    : (c) => resolvedJson !== null && JSON.stringify(c.value) === resolvedJson;
 
   // Per-source color palette — each candidate card and its arc gets a
   // unique hue so a viewer can read which source contributed which value.
@@ -1695,6 +1711,7 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
   const [resolverType, setResolverType] = useState("latest_write");
   const [prompt, setPrompt] = useState("");
   const [migrating, setMigrating] = useState(false);
+  const [synthesize, setSynthesize] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState(null);
 
@@ -1704,6 +1721,7 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
     setLoaded(false);
     setResolverType("latest_write");
     setPrompt("");
+    setSynthesize(false);
     setMigrating(false);
     setError(null);
     K.api
@@ -1717,7 +1735,10 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
         setLoadedResolver(r);
         if (r && USER_FACING_RESOLVER_TYPES.includes(r.type)) {
           setResolverType(r.type);
-          if (r.type === "skill") setPrompt(r.prompt || "");
+          if (r.type === "skill") {
+            setPrompt(r.prompt || "");
+            setSynthesize(!!r.synthesize);
+          }
         }
         // Legacy types: leave editor state at defaults but DO NOT submit
         // until the user explicitly chooses to migrate. The render branch
@@ -1747,6 +1768,9 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
           return;
         }
         resolver.prompt = prompt.trim();
+        // Send synthesize only when true; absent === false on the backend
+        // so we keep the wire shape compact for the default mode.
+        if (synthesize) resolver.synthesize = true;
       }
       await K.api.applyResolvers(
         [{ entity_type: entityType, field_name: fieldName, resolver }],
@@ -1810,15 +1834,36 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
         </select>
       </label>
       {resolverType === "skill" && (
-        <label className="resolver-editor-row resolver-editor-row-prompt">
-          <span className="resolver-editor-label">prompt</span>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="written sources outweigh verbal"
-            rows={2}
-          />
-        </label>
+        <>
+          <label className="resolver-editor-row resolver-editor-row-prompt">
+            <span className="resolver-editor-label">prompt</span>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={
+                synthesize
+                  ? "summarise every candidate's note text into one short paragraph"
+                  : "written sources outweigh verbal"
+              }
+              rows={2}
+            />
+          </label>
+          <label className="resolver-editor-toggle-row">
+            <input
+              type="checkbox"
+              checked={synthesize}
+              onChange={(e) => setSynthesize(e.target.checked)}
+            />
+            <span className="resolver-editor-toggle-text">
+              synthesize enabled
+              <span className="resolver-editor-toggle-hint">
+                {synthesize
+                  ? "LLM may produce a NEW value combining candidates"
+                  : "LLM picks ONE candidate verbatim"}
+              </span>
+            </span>
+          </label>
+        </>
       )}
       {error && <div className="resolver-editor-error">{error}</div>}
       <div className="resolver-editor-actions">

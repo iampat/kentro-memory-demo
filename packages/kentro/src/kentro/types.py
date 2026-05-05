@@ -53,6 +53,13 @@ class SkillResolverSpec(BaseModel):
     type: Literal["skill"] = "skill"
     prompt: str
     model: str | None = None
+    # When False (default), the LLM must return one of the existing candidates'
+    # value_json byte-for-byte — the "winner" is one of the actual rows and
+    # full lineage to that row is preserved. When True, the LLM may produce a
+    # new value derived from the candidates (e.g. a summary, a normalised
+    # form, an aggregate); there is no winner row, and lineage attributes the
+    # synthesised value to ALL contributing candidates.
+    synthesize: bool = False
 
 
 class AutoResolverSpec(BaseModel):

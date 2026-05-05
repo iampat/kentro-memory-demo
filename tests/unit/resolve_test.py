@@ -235,7 +235,9 @@ def test_auto_resolver_dispatches_to_skill_resolver_via_policy() -> None:
 class _FakeOnlineLLM(LLMClient):
     decision: SkillResolverDecision
 
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
+    def run_skill_resolver(
+        self, *, prompt, candidates, model=None, mode="pick", source_metadata=None
+    ):
         return self.decision
 
     def extract_entities(
@@ -326,7 +328,9 @@ def test_skill_resolver_passes_decision_actions_through_resolved_field_value() -
 
     @dataclass
     class _ScriptedLLM(LLMClient):
-        def run_skill_resolver(self, *, prompt, candidates, model=None):
+        def run_skill_resolver(
+            self, *, prompt, candidates, model=None, mode="pick", source_metadata=None
+        ):
             return SkillResolverDecision(
                 chosen_value_json="300000",
                 reason="written outweighs verbal",
@@ -387,3 +391,68 @@ def test_skill_resolver_unresolved_when_decision_picks_unknown_value() -> None:
         raise AssertionError("hallucinated value must result in UNRESOLVED")
     if out.reason is None or "not present" not in out.reason:
         raise AssertionError(f"reason should mention the unknown value, got {out.reason!r}")
+
+
+# === SkillResolver synthesize mode ============================================
+
+
+def test_skill_resolver_synthesize_accepts_value_not_in_candidates() -> None:
+    """In synthesize mode the LLM may produce a fresh value (e.g. a summary)
+    that does NOT match any candidate verbatim. The resolver should land it as
+    KNOWN with `synthesized_value_json` set and `winner=None`, so the read
+    path can attribute lineage to ALL candidates."""
+    transcript, email = _demo_conflict_candidates()
+    synthesised = '"deal sized between $250K and $300K — sources disagree"'
+    fake = _FakeOnlineLLM(
+        SkillResolverDecision(
+            chosen_value_json=synthesised,
+            reason="combined two candidate values into a summary",
+        )
+    )
+    out = resolve(
+        candidates=[transcript, email],
+        spec=SkillResolverSpec(prompt="Summarise them all", synthesize=True),
+        resolver_policies=_empty_policies(),
+        entity_type="Customer",
+        field_name="deal_size",
+        llm=fake,
+    )
+    if out.status != FieldStatus.KNOWN:
+        raise AssertionError(f"expected KNOWN from synthesize-mode decision, got {out.status}")
+    if out.winner is not None:
+        raise AssertionError("synthesize-mode resolution must not name a winner row")
+    if out.synthesized_value_json != synthesised:
+        raise AssertionError(
+            f"synthesized_value_json should carry the LLM's value, got {out.synthesized_value_json!r}"
+        )
+    if len(out.candidates) != 2:
+        raise AssertionError(
+            "synthesize-mode resolution must surface every contributing candidate"
+        )
+
+
+def test_skill_resolver_synthesize_unresolved_on_refusal() -> None:
+    """Synthesize-mode refusal still maps to UNRESOLVED with the candidates
+    surfaced — never silent concatenation. (User-reported failure mode that
+    motivated this PR.)"""
+    transcript, email = _demo_conflict_candidates()
+    fake = _FakeOnlineLLM(
+        SkillResolverDecision(
+            chosen_value_json=None,
+            reason="policy is ambiguous — cannot pick a unique strategy",
+        )
+    )
+    out = resolve(
+        candidates=[transcript, email],
+        spec=SkillResolverSpec(prompt="Summarise them all", synthesize=True),
+        resolver_policies=_empty_policies(),
+        entity_type="Customer",
+        field_name="deal_size",
+        llm=fake,
+    )
+    if out.status != FieldStatus.UNRESOLVED:
+        raise AssertionError(f"synthesize-mode refusal must be UNRESOLVED, got {out.status}")
+    if out.synthesized_value_json is not None:
+        raise AssertionError("UNRESOLVED state must not carry a synthesized value")
+    if out.reason is None or "ambiguous" not in out.reason:
+        raise AssertionError(f"reason should be passed through, got {out.reason!r}")
