@@ -2908,33 +2908,33 @@ input, textarea { font-family: inherit; font-size: inherit; color: inherit; }
   border: 1px dashed oklch(0.82 0.08 75);
   border-radius: 6px;
 }
-/* Synthesize toggle — sits under the prompt textarea when type=skill.
- * Shape mirrors the other resolver-editor-row entries (label above
- * control), with the checkbox + hint inline. */
-.resolver-editor-row-toggle .resolver-editor-toggle {
+/* Synthesize toggle — flat inline row, only rendered when type=skill.
+ * Layout: [checkbox] label, with the hint stacked below the label.
+ * Sits between the prompt textarea and the actions row. */
+.resolver-editor-toggle-row {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg-2);
+  cursor: pointer;
+  user-select: none;
 }
-.resolver-editor-row-toggle input[type="checkbox"] {
-  margin-top: 2px;
+.resolver-editor-toggle-row input[type="checkbox"] {
+  margin-top: 3px;
   flex-shrink: 0;
 }
-.resolver-editor-toggle-label {
+.resolver-editor-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink);
+  min-width: 0;
 }
 .resolver-editor-toggle-hint {
-  display: block;
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 400;
   color: var(--ink-3);
-  margin-top: 2px;
   letter-spacing: 0.02em;
 }

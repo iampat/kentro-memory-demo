@@ -1848,21 +1848,18 @@ function ResolverEditorForm({ entityType, fieldName, onApplied, onCancel }) {
               rows={2}
             />
           </label>
-          <label className="resolver-editor-row resolver-editor-row-toggle">
-            <span className="resolver-editor-label">mode</span>
-            <span className="resolver-editor-toggle">
-              <input
-                type="checkbox"
-                checked={synthesize}
-                onChange={(e) => setSynthesize(e.target.checked)}
-              />
-              <span className="resolver-editor-toggle-label">
-                synthesize ✨{" "}
-                <span className="resolver-editor-toggle-hint">
-                  {synthesize
-                    ? "LLM may produce a NEW value combining candidates"
-                    : "LLM picks ONE candidate verbatim"}
-                </span>
+          <label className="resolver-editor-toggle-row">
+            <input
+              type="checkbox"
+              checked={synthesize}
+              onChange={(e) => setSynthesize(e.target.checked)}
+            />
+            <span className="resolver-editor-toggle-text">
+              synthesize enabled
+              <span className="resolver-editor-toggle-hint">
+                {synthesize
+                  ? "LLM may produce a NEW value combining candidates"
+                  : "LLM picks ONE candidate verbatim"}
               </span>
             </span>
           </label>
