@@ -27,15 +27,35 @@ backed by real Providers.
 import json
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from kentro_server.skills.skill_loader import load_skill_markdown
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from kentro_server.skills.provider import Provider
     from kentro_server.store.models import FieldWriteRow
+
+
+SkillResolverMode = Literal["pick", "synthesize"]
+
+
+@dataclass(frozen=True)
+class SkillResolverSourceMeta:
+    """Per-document metadata the SkillResolver shows the LLM alongside each
+    candidate. Lifted out of `DocumentRow` by the read path before the LLM
+    call so policies can talk about modality ("written outweighs verbal",
+    "prefer email over Slack") without us joining the row mid-prompt.
+    """
+
+    source_class: str | None
+    source_label: str | None
+
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +265,8 @@ class LLMClient(ABC):
         prompt: str,
         candidates: "list[FieldWriteRow]",
         model: str | None = None,
+        mode: SkillResolverMode = "pick",
+        source_metadata: "Mapping[UUID, SkillResolverSourceMeta] | None" = None,
     ) -> SkillResolverDecision: ...
 
     @abstractmethod
@@ -305,11 +327,13 @@ class DefaultLLMClient(LLMClient):
         prompt: str,
         candidates: "list[FieldWriteRow]",
         model: str | None = None,
+        mode: SkillResolverMode = "pick",
+        source_metadata: "Mapping[UUID, SkillResolverSourceMeta] | None" = None,
     ) -> SkillResolverDecision:
         return self.fast_provider.complete(
             model=model or self.fast_model,
             system=load_skill_markdown("skill_resolver"),
-            user=_format_skill_user(prompt, candidates),
+            user=_format_skill_user(prompt, candidates, mode, source_metadata),
             response_model=SkillResolverDecision,
         )
 
@@ -377,10 +401,19 @@ class OfflineLLMClient(LLMClient):
 
     _UNAVAILABLE_REASON = "LLM client offline (no backend configured)"
 
-    def run_skill_resolver(self, *, prompt, candidates, model=None) -> SkillResolverDecision:
+    def run_skill_resolver(
+        self,
+        *,
+        prompt,
+        candidates,
+        model=None,
+        mode: SkillResolverMode = "pick",
+        source_metadata=None,
+    ) -> SkillResolverDecision:
         logger.info(
-            "OfflineLLMClient.run_skill_resolver — %d candidates → UNRESOLVED",
+            "OfflineLLMClient.run_skill_resolver — %d candidates, mode=%s → UNRESOLVED",
             len(candidates),
+            mode,
         )
         return SkillResolverDecision(
             chosen_value_json=None,
@@ -415,18 +448,40 @@ class OfflineLLMClient(LLMClient):
 # cache key stable.
 
 
-def _format_skill_user(policy: str, candidates: "list[FieldWriteRow]") -> str:
+def _format_skill_user(
+    policy: str,
+    candidates: "list[FieldWriteRow]",
+    mode: SkillResolverMode = "pick",
+    source_metadata: "Mapping[UUID, SkillResolverSourceMeta] | None" = None,
+) -> str:
+    """Render the user message: MODE + POLICY + CANDIDATES (with source class
+    + label per candidate when known). Source metadata may be `None` (e.g.
+    when the caller doesn't have DB access) — in that case `source_class`
+    and `source_label` come through as `null` and the LLM degrades to
+    inferring from `agent_id` alone.
+    """
     rendered_candidates = []
     for c in candidates:
+        meta = (
+            source_metadata.get(c.source_document_id)
+            if (source_metadata and c.source_document_id)
+            else None
+        )
         rendered_candidates.append(
             {
                 "agent_id": c.written_by_agent_id,
                 "written_at": c.written_at.isoformat(),
                 "source_document_id": str(c.source_document_id) if c.source_document_id else None,
+                "source_class": meta.source_class if meta else None,
+                "source_label": meta.source_label if meta else None,
                 "value_json": c.value_json,
             }
         )
-    return f"POLICY:\n{policy}\n\nCANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
+    return (
+        f"MODE: {mode}\n"
+        f"POLICY:\n{policy}\n\n"
+        f"CANDIDATES:\n{json.dumps(rendered_candidates, indent=2)}"
+    )
 
 
 def _format_extract_user(

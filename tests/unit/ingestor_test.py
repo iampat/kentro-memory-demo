@@ -42,7 +42,9 @@ class _FakeExtractor(LLMClient):
     queue: list[ExtractionResult] = field(default_factory=list)
     extract_call_count: int = 0
 
-    def run_skill_resolver(self, *, prompt, candidates, model=None):
+    def run_skill_resolver(
+        self, *, prompt, candidates, model=None, mode="pick", source_metadata=None
+    ):
         return SkillResolverDecision(chosen_value_json=None, reason="not under test")
 
     def extract_entities(

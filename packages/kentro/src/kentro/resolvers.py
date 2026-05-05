@@ -48,17 +48,33 @@ class SkillResolver(Resolver):
 
     `prompt` is the policy ("written outweighs verbal, latest among written wins").
     `model` is an optional override; defaults to the server's `fast` LLM tier.
+    `synthesize=False` (default) — the LLM picks ONE existing candidate's
+    `value_json` verbatim; lineage traces back to that row.
+    `synthesize=True` — the LLM produces a new value derived from the
+    candidates ("summarise them all", "merge into a JSON object", etc.);
+    lineage attributes ALL candidates as contributing sources.
 
     If the LLM cannot decide, the server returns `FieldValue(status=UNRESOLVED, reason=...)`.
     The SDK never asks back — agent layers handle the unresolved case.
     """
 
-    def __init__(self, prompt: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        prompt: str,
+        model: str | None = None,
+        *,
+        synthesize: bool = False,
+    ) -> None:
         self.prompt = prompt
         self.model = model
+        self.synthesize = synthesize
 
     def to_spec(self) -> SkillResolverSpec:
-        return SkillResolverSpec(prompt=self.prompt, model=self.model)
+        return SkillResolverSpec(
+            prompt=self.prompt,
+            model=self.model,
+            synthesize=self.synthesize,
+        )
 
 
 class AutoResolver(Resolver):
